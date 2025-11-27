@@ -366,6 +366,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Handle time-travel input first (before global keys intercept letters)
+		if m.focused == focusTimeTravelInput {
+			m = m.handleTimeTravelInputKeys(msg)
+			return m, nil
+		}
+
 		// Handle keys when not filtering
 		if m.list.FilterState() != list.Filtering {
 			switch msg.String() {
@@ -512,10 +518,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Focus-specific key handling
 			switch m.focused {
-			case focusTimeTravelInput:
-				m = m.handleTimeTravelInputKeys(msg)
-				return m, nil
-
 			case focusRecipePicker:
 				m = m.handleRecipePickerKeys(msg)
 
@@ -2091,6 +2093,9 @@ func (m *Model) copyIssueToClipboard() {
 	if len(issue.Dependencies) > 0 {
 		sb.WriteString("\n## Dependencies\n\n")
 		for _, dep := range issue.Dependencies {
+			if dep == nil {
+				continue
+			}
 			sb.WriteString(fmt.Sprintf("- %s (%s)\n", dep.DependsOnID, dep.Type))
 		}
 	}
@@ -2123,31 +2128,56 @@ func (m *Model) openInEditor() {
 		return
 	}
 
-	// Determine editor
+	// Determine editor - prefer GUI editors that work in background
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = os.Getenv("VISUAL")
 	}
+
+	// Check if it's a terminal editor (won't work well with TUI)
+	terminalEditors := map[string]bool{
+		"vim": true, "vi": true, "nvim": true, "nano": true,
+		"emacs": true, "pico": true, "joe": true, "ne": true,
+	}
+	editorBase := filepath.Base(editor)
+	if terminalEditors[editorBase] {
+		m.statusMsg = fmt.Sprintf("⚠️ %s is a terminal editor - set $EDITOR to a GUI editor or quit first", editorBase)
+		m.statusIsError = true
+		return
+	}
+
+	// If no editor set, try platform-specific GUI options
 	if editor == "" {
-		// Platform-specific defaults
 		switch runtime.GOOS {
+		case "darwin":
+			// Use 'open' to launch default app for .jsonl files
+			cmd := exec.Command("open", "-t", beadsFile)
+			if err := cmd.Start(); err == nil {
+				m.statusMsg = "📝 Opened in default text editor"
+				m.statusIsError = false
+				return
+			}
 		case "windows":
 			editor = "notepad"
-		case "darwin":
-			editor = "nano" // macOS ships with nano
-		default:
-			editor = "nano" // Most Linux distros have nano
+		case "linux":
+			// Try xdg-open first, then common GUI editors
+			for _, tryEditor := range []string{"xdg-open", "code", "gedit", "kate", "xed"} {
+				if _, err := exec.LookPath(tryEditor); err == nil {
+					editor = tryEditor
+					break
+				}
+			}
 		}
 	}
 
-	// Launch editor
-	cmd := exec.Command(editor, beadsFile)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if editor == "" {
+		m.statusMsg = "❌ No GUI editor found. Set $EDITOR to a GUI editor"
+		m.statusIsError = true
+		return
+	}
 
-	// For terminal-based editors, we need to handle differently
-	// We'll just start the process and let the user know
+	// Launch GUI editor in background
+	cmd := exec.Command(editor, beadsFile)
 	err = cmd.Start()
 	if err != nil {
 		m.statusMsg = fmt.Sprintf("❌ Failed to open editor: %v", err)
@@ -2155,6 +2185,6 @@ func (m *Model) openInEditor() {
 		return
 	}
 
-	m.statusMsg = fmt.Sprintf("📝 Opened in %s (background)", editor)
+	m.statusMsg = fmt.Sprintf("📝 Opened in %s", filepath.Base(editor))
 	m.statusIsError = false
 }
