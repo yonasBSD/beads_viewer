@@ -3,10 +3,13 @@ package ui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"beads_viewer/pkg/analysis"
+	"beads_viewer/pkg/export"
 	"beads_viewer/pkg/loader"
 	"beads_viewer/pkg/model"
 	"beads_viewer/pkg/recipe"
@@ -480,6 +483,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.focused = focusList
 				}
+				return m, nil
+
+			case "E":
+				// Export to Markdown file
+				m.exportToMarkdown()
 				return m, nil
 			}
 
@@ -1217,6 +1225,7 @@ func (m Model) renderHelpOverlay() string {
 	sb.WriteString(sectionStyle.Render("General"))
 	sb.WriteString("\n")
 	general := []struct{ key, desc string }{
+		{"E", "Export to Markdown"},
 		{"q", "Back / Quit"},
 		{"Ctrl+c", "Force quit"},
 	}
@@ -1878,4 +1887,41 @@ func (m Model) IsTimeTravelMode() bool {
 // TimeTravelDiff returns the current diff (nil if not in time-travel mode)
 func (m Model) TimeTravelDiff() *analysis.SnapshotDiff {
 	return m.timeTravelDiff
+}
+
+// exportToMarkdown exports all issues to a Markdown file with auto-generated filename
+func (m *Model) exportToMarkdown() {
+	// Generate smart filename: beads_report_<project>_YYYY-MM-DD.md
+	filename := m.generateExportFilename()
+
+	// Export the issues
+	err := export.SaveMarkdownToFile(m.issues, filename)
+	if err != nil {
+		m.statusMsg = fmt.Sprintf("❌ Export failed: %v", err)
+		m.statusIsError = true
+		return
+	}
+
+	m.statusMsg = fmt.Sprintf("✅ Exported %d issues to %s", len(m.issues), filename)
+	m.statusIsError = false
+}
+
+// generateExportFilename creates a smart filename based on project and date
+func (m *Model) generateExportFilename() string {
+	// Get project name from current directory
+	projectName := "beads"
+	if cwd, err := os.Getwd(); err == nil {
+		projectName = filepath.Base(cwd)
+		// Sanitize: replace spaces and special chars with underscores
+		projectName = strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+				return r
+			}
+			return '_'
+		}, projectName)
+	}
+
+	// Format: beads_report_<project>_YYYY-MM-DD.md
+	timestamp := time.Now().Format("2006-01-02")
+	return fmt.Sprintf("beads_report_%s_%s.md", projectName, timestamp)
 }
