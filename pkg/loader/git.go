@@ -234,6 +234,9 @@ func (g *GitLoader) loadFileFromGit(sha, path string) ([]model.Issue, error) {
 
 // parseJSONL parses JSONL content into issues
 func parseJSONL(data []byte) ([]model.Issue, error) {
+	// Strip BOM from the entire file content if present at start
+	data = stripBOM(data)
+
 	var issues []model.Issue
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	// Increase buffer size for large lines

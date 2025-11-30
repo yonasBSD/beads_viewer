@@ -2,6 +2,7 @@ package loader
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -126,10 +127,14 @@ func LoadIssuesFromFile(path string) ([]model.Issue, error) {
 			continue
 		}
 
+		// Strip UTF-8 BOM if present on the first line
+		if lineNum == 1 {
+			line = stripBOM(line)
+		}
+
 		var issue model.Issue
 		if err := json.Unmarshal(line, &issue); err != nil {
 			// Skip malformed lines but continue loading the rest
-			// In a real app we might want to log this to a debug log
 			continue
 		}
 
@@ -147,4 +152,12 @@ func LoadIssuesFromFile(path string) ([]model.Issue, error) {
 	}
 
 	return issues, nil
+}
+
+// stripBOM removes the UTF-8 Byte Order Mark if present
+func stripBOM(b []byte) []byte {
+	if bytes.HasPrefix(b, []byte{0xEF, 0xBB, 0xBF}) {
+		return b[3:]
+	}
+	return b
 }
