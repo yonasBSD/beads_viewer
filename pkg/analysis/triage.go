@@ -554,6 +554,226 @@ func buildCommands(topID string) CommandHelpers {
 }
 
 // ============================================================================
+// Unified Triage Scoring (bv-147)
+// Extends base impact scoring with triage-specific factors
+// ============================================================================
+
+// TriageScore represents a triage-specific score with factors applied
+type TriageScore struct {
+	IssueID        string         `json:"issue_id"`
+	Title          string         `json:"title"`
+	BaseScore      float64        `json:"base_score"`      // From ComputeImpactScores
+	TriageScore    float64        `json:"triage_score"`    // Final triage-adjusted score
+	Breakdown      ScoreBreakdown `json:"breakdown"`       // Original breakdown
+	TriageFactors  TriageFactors  `json:"triage_factors"`  // Triage-specific factors
+	FactorsApplied []string       `json:"factors_applied"` // Which factors were used
+	FactorsPending []string       `json:"factors_pending"` // Which factors are not yet available
+	Priority       int            `json:"priority"`
+	Status         string         `json:"status"`
+}
+
+// TriageFactors holds the triage-specific score modifiers
+type TriageFactors struct {
+	UnblockBoost    float64 `json:"unblock_boost"`              // Boost for items that unblock many others
+	QuickWinBoost   float64 `json:"quick_win_boost"`            // Boost for low-effort high-impact items
+	LabelHealth     float64 `json:"label_health,omitempty"`     // Phase 2: Label health factor
+	ClaimPenalty    float64 `json:"claim_penalty,omitempty"`    // Phase 3: Penalty for claimed items
+	AttentionScore  float64 `json:"attention_score,omitempty"`  // Phase 4: Attention-weighted health
+}
+
+// TriageScoringOptions configures triage scoring behavior
+type TriageScoringOptions struct {
+	// Weight configuration
+	BaseScoreWeight    float64 // Default 0.70
+	UnblockBoostWeight float64 // Default 0.15
+	QuickWinWeight     float64 // Default 0.15
+
+	// Thresholds
+	UnblockThreshold int     // Min unblocks to get full boost (default 5)
+	QuickWinMaxDepth int     // Max dependency depth for quick win (default 2)
+
+	// Feature flags (for graceful degradation)
+	EnableLabelHealth    bool   // Phase 2 feature
+	EnableClaimPenalty   bool   // Phase 3 feature
+	EnableAttentionScore bool   // Phase 4 feature
+	ClaimedByAgent       string // Current agent for claim penalty calculation
+}
+
+// DefaultTriageScoringOptions returns sensible defaults
+func DefaultTriageScoringOptions() TriageScoringOptions {
+	return TriageScoringOptions{
+		BaseScoreWeight:    0.70,
+		UnblockBoostWeight: 0.15,
+		QuickWinWeight:     0.15,
+		UnblockThreshold:   5,
+		QuickWinMaxDepth:   2,
+		// All optional features off by default (MVP mode)
+		EnableLabelHealth:    false,
+		EnableClaimPenalty:   false,
+		EnableAttentionScore: false,
+	}
+}
+
+// ComputeTriageScores calculates triage-optimized scores for all open issues
+func ComputeTriageScores(issues []model.Issue) []TriageScore {
+	return ComputeTriageScoresWithOptions(issues, DefaultTriageScoringOptions())
+}
+
+// ComputeTriageScoresWithOptions calculates triage scores with custom options
+func ComputeTriageScoresWithOptions(issues []model.Issue, opts TriageScoringOptions) []TriageScore {
+	if len(issues) == 0 {
+		return nil
+	}
+
+	// Build analyzer for base scoring and graph analysis
+	analyzer := NewAnalyzer(issues)
+	baseScores := analyzer.ComputeImpactScores()
+
+	// Build unblocks map for factor calculation
+	unblocksMap := buildUnblocksMap(analyzer, issues)
+
+	// Calculate max unblocks for normalization
+	maxUnblocks := 0
+	for _, unblocks := range unblocksMap {
+		if len(unblocks) > maxUnblocks {
+			maxUnblocks = len(unblocks)
+		}
+	}
+
+	// Build triage scores
+	triageScores := make([]TriageScore, 0, len(baseScores))
+	for _, base := range baseScores {
+		ts := computeSingleTriageScore(base, unblocksMap, maxUnblocks, analyzer, opts)
+		triageScores = append(triageScores, ts)
+	}
+
+	// Sort by triage score descending
+	sort.Slice(triageScores, func(i, j int) bool {
+		if triageScores[i].TriageScore != triageScores[j].TriageScore {
+			return triageScores[i].TriageScore > triageScores[j].TriageScore
+		}
+		return triageScores[i].IssueID < triageScores[j].IssueID
+	})
+
+	return triageScores
+}
+
+// computeSingleTriageScore calculates the triage score for a single issue
+func computeSingleTriageScore(base ImpactScore, unblocksMap map[string][]string, maxUnblocks int, analyzer *Analyzer, opts TriageScoringOptions) TriageScore {
+	factors := TriageFactors{}
+	applied := []string{"base"}
+	pending := []string{}
+
+	// Calculate unblock boost
+	unblocks := unblocksMap[base.IssueID]
+	if len(unblocks) > 0 {
+		// Normalize unblocks: items that unblock more get higher boost
+		unblocksNorm := float64(len(unblocks)) / float64(maxOf(maxUnblocks, opts.UnblockThreshold))
+		if unblocksNorm > 1.0 {
+			unblocksNorm = 1.0
+		}
+		factors.UnblockBoost = unblocksNorm * opts.UnblockBoostWeight
+		applied = append(applied, "unblock")
+	}
+
+	// Calculate quick-win boost
+	// Quick wins are items with low blocker depth but high impact
+	blockerDepth := analyzer.GetBlockerDepth(base.IssueID)
+	if blockerDepth <= opts.QuickWinMaxDepth && blockerDepth >= 0 {
+		// Lower depth = higher quick win potential
+		depthFactor := 1.0 - float64(blockerDepth)/float64(opts.QuickWinMaxDepth+1)
+		// Combine with base score for impact consideration
+		factors.QuickWinBoost = depthFactor * base.Score * opts.QuickWinWeight
+		if factors.QuickWinBoost > opts.QuickWinWeight {
+			factors.QuickWinBoost = opts.QuickWinWeight // Cap at max weight
+		}
+		applied = append(applied, "quick_win")
+	}
+
+	// Track pending features
+	if !opts.EnableLabelHealth {
+		pending = append(pending, "label_health")
+	}
+	if !opts.EnableClaimPenalty {
+		pending = append(pending, "claim_penalty")
+	}
+	if !opts.EnableAttentionScore {
+		pending = append(pending, "attention_score")
+	}
+
+	// Calculate final triage score
+	triageScore := base.Score*opts.BaseScoreWeight + factors.UnblockBoost + factors.QuickWinBoost
+
+	// Future phases (when enabled):
+	// Phase 2: triageScore += factors.LabelHealth * labelHealthWeight
+	// Phase 3: if claimedByOther { triageScore *= 0.1 }
+	// Phase 4: Replace label health with attention-weighted health
+
+	return TriageScore{
+		IssueID:        base.IssueID,
+		Title:          base.Title,
+		BaseScore:      base.Score,
+		TriageScore:    triageScore,
+		Breakdown:      base.Breakdown,
+		TriageFactors:  factors,
+		FactorsApplied: applied,
+		FactorsPending: pending,
+		Priority:       base.Priority,
+		Status:         base.Status,
+	}
+}
+
+// GetBlockerDepth returns the depth of the blocker chain for an issue
+// Returns 0 if no blockers, 1 if blocked by one level, etc.
+// Returns -1 if the issue is part of a cycle
+func (a *Analyzer) GetBlockerDepth(issueID string) int {
+	visited := make(map[string]bool)
+	return a.getBlockerDepthRecursive(issueID, visited, 0)
+}
+
+func (a *Analyzer) getBlockerDepthRecursive(issueID string, visited map[string]bool, depth int) int {
+	if visited[issueID] {
+		return -1 // Cycle detected
+	}
+	visited[issueID] = true
+
+	blockers := a.GetOpenBlockers(issueID)
+	if len(blockers) == 0 {
+		return depth
+	}
+
+	maxDepth := depth
+	for _, blockerID := range blockers {
+		blockerDepth := a.getBlockerDepthRecursive(blockerID, visited, depth+1)
+		if blockerDepth == -1 {
+			return -1 // Propagate cycle
+		}
+		if blockerDepth > maxDepth {
+			maxDepth = blockerDepth
+		}
+	}
+
+	return maxDepth
+}
+
+// maxOf returns the maximum of two integers
+func maxOf(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// GetTopTriageScores returns the top N triage scores
+func GetTopTriageScores(issues []model.Issue, n int) []TriageScore {
+	scores := ComputeTriageScores(issues)
+	if n > len(scores) {
+		n = len(scores)
+	}
+	return scores[:n]
+}
+
+// ============================================================================
 // Multi-Agent Coordination Types (bv-146)
 // These types enable team awareness and conflict detection for agent swarms
 // ============================================================================
