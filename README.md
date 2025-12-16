@@ -994,6 +994,7 @@ These commands output **structured JSON** designed for programmatic consumption:
 | `--robot-insights` | Graph metrics + top N lists | Project health assessment |
 | `--robot-plan` | Actionable tracks + dependencies | Work queue generation |
 | `--robot-priority` | Priority recommendations | Automated triage |
+| `--robot-suggest` | Hygiene suggestions (deps/dupes/labels/cycles) | Project cleanup automation |
 | `--robot-diff` | JSON diff (with `--diff-since`) | Change tracking |
 | `--robot-recipes` | Available recipe list | Recipe discovery |
 | `--robot-help` | Detailed AI agent documentation | Agent onboarding |
@@ -1038,6 +1039,16 @@ bv --recipe .beads/recipes/sprint.yaml
 ```bash
 # Generate Markdown report with Mermaid diagrams
 bv --export-md report.md
+```
+
+### Semantic Search
+
+```bash
+# Semantic vector search over titles/descriptions
+bv --search "login oauth"
+
+# JSON output for automation
+bv --search "login oauth" --robot-search
 ```
 
 ### Example: AI Agent Workflow
@@ -1432,6 +1443,7 @@ bv
 | | `r` | Show **Ready** (Unblocked) |
 | | `c` | Show **Closed** Issues |
 | | `/` | **Search** (Fuzzy) |
+| | `Ctrl+S` | Toggle **Search Mode** (Semantic ↔ Fuzzy) |
 | **Views** | `b` | Toggle **Kanban Board** |
 | | `i` | Toggle **Insights Dashboard** |
 | | `g` | Toggle **Graph Visualizer** |
@@ -1464,6 +1476,9 @@ bv
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `BEADS_DIR` | Custom beads directory path. When set, overrides the default `.beads` directory lookup. | `.beads` in cwd |
+| `BV_SEMANTIC_EMBEDDER` | Semantic embedding provider for `bv --search` and TUI semantic mode. | `hash` |
+| `BV_SEMANTIC_DIM` | Embedding dimension for semantic search index. | `384` |
+| `BV_SEMANTIC_MODEL` | Provider-specific model name for semantic search (optional). | (empty) |
 
 **Use cases for `BEADS_DIR`:**
 - **Monorepos**: Single beads directory shared across multiple packages
@@ -1615,6 +1630,7 @@ SOFTWARE.
 - `bv --robot-insights` → `.status`, `.analysis_config`, metric maps (capped by `BV_INSIGHTS_MAP_LIMIT`), `Bottlenecks`, `CriticalPath`, `Cycles`, plus advanced signals: `Cores` (k-core), `Articulation` (cut vertices), `Slack` (longest-path slack).
 - `bv --robot-plan` → `.plan.tracks[].items[].{id,unblocks}` for downstream unlocks; `.plan.summary.highest_impact`.
 - `bv --robot-priority` → `.recommendations[].{id,current_priority,suggested_priority,confidence,reasoning}`.
+- `bv --robot-suggest` → `.suggestions.suggestions[]` (ranked suggestions) + `.suggestions.stats` (counts) + `.usage_hints`.
 - `bv --robot-diff --diff-since <ref>` → `{from_data_hash,to_data_hash,diff.summary,diff.new_issues,diff.cycle_*}`.
 - `bv --robot-history` → `.histories[ID].events` + `.commit_index` for reverse lookup; `.stats.method_distribution` shows how correlations were inferred.
 
