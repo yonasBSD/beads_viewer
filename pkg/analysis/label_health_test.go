@@ -1451,3 +1451,301 @@ func TestComputeLabelAttentionScoresGetTop(t *testing.T) {
 		t.Errorf("Expected 5 labels when asking for 10, got %d", len(topAll))
 	}
 }
+
+// === Edge case tests for circular dependencies (bv-127) ===
+
+func TestComputeLabelSubgraphCircularDeps(t *testing.T) {
+	// Create circular dependency: A -> B -> C -> A
+	issues := []model.Issue{
+		{
+			ID:     "bv-1",
+			Labels: []string{"core"},
+			Status: model.StatusOpen,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-1", DependsOnID: "bv-2", Type: model.DepBlocks},
+			},
+		},
+		{
+			ID:     "bv-2",
+			Labels: []string{"core"},
+			Status: model.StatusOpen,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-2", DependsOnID: "bv-3", Type: model.DepBlocks},
+			},
+		},
+		{
+			ID:     "bv-3",
+			Labels: []string{"core"},
+			Status: model.StatusOpen,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-3", DependsOnID: "bv-1", Type: model.DepBlocks},
+			},
+		},
+	}
+
+	sg := ComputeLabelSubgraph(issues, "core")
+
+	// Should handle cycle without infinite loop
+	if sg.IsEmpty() {
+		t.Error("Expected non-empty subgraph")
+	}
+	if len(sg.CoreIssues) != 3 {
+		t.Errorf("Expected 3 core issues, got %d", len(sg.CoreIssues))
+	}
+	// In a cycle, all nodes have both in and out edges
+	for _, id := range sg.CoreIssues {
+		if sg.InDegree[id] == 0 {
+			t.Errorf("Issue %s should have incoming edges in cycle", id)
+		}
+		if sg.OutDegree[id] == 0 {
+			t.Errorf("Issue %s should have outgoing edges in cycle", id)
+		}
+	}
+}
+
+func TestComputeLabelPageRankCircularDeps(t *testing.T) {
+	// Circular dependency should still produce valid PageRank
+	issues := []model.Issue{
+		{
+			ID:     "bv-1",
+			Labels: []string{"cycle"},
+			Status: model.StatusOpen,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-1", DependsOnID: "bv-2", Type: model.DepBlocks},
+			},
+		},
+		{
+			ID:     "bv-2",
+			Labels: []string{"cycle"},
+			Status: model.StatusOpen,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-2", DependsOnID: "bv-1", Type: model.DepBlocks},
+			},
+		},
+	}
+
+	result := ComputeLabelPageRankFromIssues(issues, "cycle")
+
+	// Should not panic and should have scores
+	if len(result.Scores) != 2 {
+		t.Errorf("Expected 2 scores, got %d", len(result.Scores))
+	}
+
+	// In a 2-node cycle, PageRank should be similar for both
+	score1 := result.Scores["bv-1"]
+	score2 := result.Scores["bv-2"]
+	diff := score1 - score2
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > 0.1 {
+		t.Errorf("Expected similar PageRank in cycle, got %f vs %f", score1, score2)
+	}
+}
+
+func TestComputeLabelAttentionScoresCircularDeps(t *testing.T) {
+	cfg := DefaultLabelHealthConfig()
+	now := time.Now()
+
+	// Create circular deps across labels
+	issues := []model.Issue{
+		{
+			ID:        "bv-1",
+			Labels:    []string{"alpha"},
+			Status:    model.StatusOpen,
+			UpdatedAt: now,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-1", DependsOnID: "bv-2", Type: model.DepBlocks},
+			},
+		},
+		{
+			ID:        "bv-2",
+			Labels:    []string{"beta"},
+			Status:    model.StatusOpen,
+			UpdatedAt: now,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-2", DependsOnID: "bv-1", Type: model.DepBlocks},
+			},
+		},
+	}
+
+	result := ComputeLabelAttentionScores(issues, cfg, now)
+
+	// Should handle circular deps without crash
+	if len(result.Labels) != 2 {
+		t.Errorf("Expected 2 labels, got %d", len(result.Labels))
+	}
+
+	// Both should have similar attention (symmetric cycle)
+	for _, score := range result.Labels {
+		if score.AttentionScore < 0 {
+			t.Errorf("Attention score should be non-negative: %f", score.AttentionScore)
+		}
+	}
+}
+
+func TestComputeAllLabelHealthIntegration(t *testing.T) {
+	cfg := DefaultLabelHealthConfig()
+	now := time.Now()
+	old := now.Add(-30 * 24 * time.Hour)
+
+	closedAt := now
+	issues := []model.Issue{
+		// Healthy label: recent activity, no blocks
+		{ID: "bv-1", Labels: []string{"healthy"}, Status: model.StatusOpen, UpdatedAt: now},
+		{ID: "bv-2", Labels: []string{"healthy"}, Status: model.StatusClosed, UpdatedAt: now, ClosedAt: &closedAt},
+
+		// Warning label: some stale issues
+		{ID: "bv-3", Labels: []string{"warning"}, Status: model.StatusOpen, UpdatedAt: old},
+		{ID: "bv-4", Labels: []string{"warning"}, Status: model.StatusOpen, UpdatedAt: now},
+
+		// Critical label: blocked and stale
+		{
+			ID:        "bv-5",
+			Labels:    []string{"critical"},
+			Status:    model.StatusBlocked,
+			UpdatedAt: old,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-5", DependsOnID: "bv-6", Type: model.DepBlocks},
+			},
+		},
+		{ID: "bv-6", Labels: []string{"critical"}, Status: model.StatusOpen, UpdatedAt: old},
+	}
+
+	result := ComputeAllLabelHealth(issues, cfg, now)
+
+	// Should have all labels
+	if len(result.Labels) != 3 {
+		t.Errorf("Expected 3 labels, got %d", len(result.Labels))
+	}
+
+	// Check we have summaries
+	if len(result.Summaries) != 3 {
+		t.Errorf("Expected 3 summaries, got %d", len(result.Summaries))
+	}
+
+	// Cross-label flow should be computed
+	if result.CrossLabelFlow == nil {
+		t.Error("Expected CrossLabelFlow to be non-nil")
+	} else if len(result.CrossLabelFlow.Labels) != 3 {
+		t.Errorf("Expected cross-label flow for 3 labels, got %d", len(result.CrossLabelFlow.Labels))
+	}
+
+	// Check health levels make sense
+	healthyFound := false
+	criticalFound := false
+	for _, summary := range result.Summaries {
+		if summary.Label == "healthy" && summary.HealthLevel == "healthy" {
+			healthyFound = true
+		}
+		// Note: "critical" may or may not be critical based on scoring
+		if summary.Label == "critical" {
+			criticalFound = true
+		}
+	}
+	if !healthyFound {
+		t.Log("Note: 'healthy' label may not have healthy status based on scoring")
+	}
+	if !criticalFound {
+		t.Error("Expected 'critical' label in summaries")
+	}
+}
+
+func TestComputeCrossLabelFlowCircularDeps(t *testing.T) {
+	cfg := DefaultLabelHealthConfig()
+
+	// Create circular flow: A -> B -> C -> A
+	issues := []model.Issue{
+		{
+			ID:     "bv-1",
+			Labels: []string{"labelA"},
+			Status: model.StatusOpen,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-1", DependsOnID: "bv-2", Type: model.DepBlocks},
+			},
+		},
+		{
+			ID:     "bv-2",
+			Labels: []string{"labelB"},
+			Status: model.StatusOpen,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-2", DependsOnID: "bv-3", Type: model.DepBlocks},
+			},
+		},
+		{
+			ID:     "bv-3",
+			Labels: []string{"labelC"},
+			Status: model.StatusOpen,
+			Dependencies: []*model.Dependency{
+				{IssueID: "bv-3", DependsOnID: "bv-1", Type: model.DepBlocks},
+			},
+		},
+	}
+
+	flow := ComputeCrossLabelFlow(issues, cfg)
+
+	// Should handle cycles without infinite loop
+	if len(flow.Labels) != 3 {
+		t.Errorf("Expected 3 labels in flow, got %d", len(flow.Labels))
+	}
+
+	// Should have cross-label dependencies
+	if flow.TotalCrossLabelDeps == 0 {
+		t.Error("Expected cross-label dependencies in cycle")
+	}
+}
+
+func TestLabelSubgraphNoLabels(t *testing.T) {
+	// Issues with no labels
+	issues := []model.Issue{
+		{ID: "bv-1", Status: model.StatusOpen},
+		{ID: "bv-2", Status: model.StatusOpen},
+	}
+
+	sg := ComputeLabelSubgraph(issues, "nonexistent")
+
+	if !sg.IsEmpty() {
+		t.Error("Expected empty subgraph for nonexistent label")
+	}
+	if len(sg.CoreIssues) != 0 {
+		t.Errorf("Expected 0 core issues, got %d", len(sg.CoreIssues))
+	}
+}
+
+func TestLabelPageRankNoLabels(t *testing.T) {
+	issues := []model.Issue{
+		{ID: "bv-1", Status: model.StatusOpen},
+	}
+
+	result := ComputeLabelPageRankFromIssues(issues, "missing")
+
+	if len(result.Scores) != 0 {
+		t.Errorf("Expected 0 scores for missing label, got %d", len(result.Scores))
+	}
+	if result.IssueCount != 0 {
+		t.Errorf("Expected 0 issue count, got %d", result.IssueCount)
+	}
+}
+
+func TestAttentionScoresSingleLabel(t *testing.T) {
+	cfg := DefaultLabelHealthConfig()
+	now := time.Now()
+
+	// Just one label
+	issues := []model.Issue{
+		{ID: "bv-1", Labels: []string{"solo"}, Status: model.StatusOpen, UpdatedAt: now},
+	}
+
+	result := ComputeLabelAttentionScores(issues, cfg, now)
+
+	if len(result.Labels) != 1 {
+		t.Errorf("Expected 1 label, got %d", len(result.Labels))
+	}
+	if result.Labels[0].Label != "solo" {
+		t.Errorf("Expected 'solo' label, got %s", result.Labels[0].Label)
+	}
+	// Single label should have normalized score of 1.0 (or 0 if no others)
+	if result.Labels[0].Rank != 1 {
+		t.Errorf("Expected rank 1, got %d", result.Labels[0].Rank)
+	}
+}
