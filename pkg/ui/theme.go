@@ -43,24 +43,25 @@ func DefaultTheme(r *lipgloss.Renderer) Theme {
 		Renderer: r,
 
 		// Dracula / Light Mode equivalent
-		Primary:   lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#BD93F9"}, // Purple
+		// Light mode colors improved for WCAG AA compliance (bv-3fcg)
+		Primary:   lipgloss.AdaptiveColor{Light: "#6B47D9", Dark: "#BD93F9"}, // Purple (darker for contrast)
 		Secondary: lipgloss.AdaptiveColor{Light: "#555555", Dark: "#6272A4"}, // Gray
-		Subtext:   lipgloss.AdaptiveColor{Light: "#999999", Dark: "#BFBFBF"}, // Dim
+		Subtext:   lipgloss.AdaptiveColor{Light: "#666666", Dark: "#BFBFBF"}, // Dim (was #999999, now ~6:1)
 
-		Open:       lipgloss.AdaptiveColor{Light: "#00A800", Dark: "#50FA7B"}, // Green
-		InProgress: lipgloss.AdaptiveColor{Light: "#007EA8", Dark: "#8BE9FD"}, // Cyan
-		Blocked:    lipgloss.AdaptiveColor{Light: "#D80000", Dark: "#FF5555"}, // Red
+		Open:       lipgloss.AdaptiveColor{Light: "#007700", Dark: "#50FA7B"}, // Green (was #00A800, now ~4.6:1)
+		InProgress: lipgloss.AdaptiveColor{Light: "#006080", Dark: "#8BE9FD"}, // Cyan (darker for contrast)
+		Blocked:    lipgloss.AdaptiveColor{Light: "#CC0000", Dark: "#FF5555"}, // Red (slightly adjusted)
 		Closed:     lipgloss.AdaptiveColor{Light: "#555555", Dark: "#6272A4"}, // Gray
 
-		Bug:     lipgloss.AdaptiveColor{Light: "#D80000", Dark: "#FF5555"}, // Red
-		Feature: lipgloss.AdaptiveColor{Light: "#D88000", Dark: "#FFB86C"}, // Orange
-		Epic:    lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#BD93F9"}, // Purple
-		Task:    lipgloss.AdaptiveColor{Light: "#A8A800", Dark: "#F1FA8C"}, // Yellow
-		Chore:   lipgloss.AdaptiveColor{Light: "#007EA8", Dark: "#8BE9FD"}, // Cyan
+		Bug:     lipgloss.AdaptiveColor{Light: "#CC0000", Dark: "#FF5555"}, // Red
+		Feature: lipgloss.AdaptiveColor{Light: "#B06800", Dark: "#FFB86C"}, // Orange (darker for contrast)
+		Epic:    lipgloss.AdaptiveColor{Light: "#6B47D9", Dark: "#BD93F9"}, // Purple (darker)
+		Task:    lipgloss.AdaptiveColor{Light: "#808000", Dark: "#F1FA8C"}, // Yellow/olive (darker for contrast)
+		Chore:   lipgloss.AdaptiveColor{Light: "#006080", Dark: "#8BE9FD"}, // Cyan (darker)
 
-		Border:    lipgloss.AdaptiveColor{Light: "#DDDDDD", Dark: "#44475A"},
-		Highlight: lipgloss.AdaptiveColor{Light: "#EEEEEE", Dark: "#44475A"},
-		Muted:     lipgloss.AdaptiveColor{Light: "#888888", Dark: "#6272A4"}, // Dimmed text
+		Border:    lipgloss.AdaptiveColor{Light: "#AAAAAA", Dark: "#44475A"}, // Border (was #DDDDDD)
+		Highlight: lipgloss.AdaptiveColor{Light: "#E0E0E0", Dark: "#44475A"}, // Slightly darker
+		Muted:     lipgloss.AdaptiveColor{Light: "#555555", Dark: "#6272A4"}, // Dimmed text (was #888888, now ~7:1)
 	}
 
 	t.Base = r.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#F8F8F2"})
