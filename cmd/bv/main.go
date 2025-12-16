@@ -42,6 +42,7 @@ func main() {
 	robotDiff := flag.Bool("robot-diff", false, "Output diff as JSON (use with --diff-since)")
 	robotRecipes := flag.Bool("robot-recipes", false, "Output available recipes as JSON for AI agents")
 	robotLabelHealth := flag.Bool("robot-label-health", false, "Output label health metrics as JSON for AI agents")
+	robotLabelFlow := flag.Bool("robot-label-flow", false, "Output cross-label dependency flow as JSON for AI agents")
 	robotAlerts := flag.Bool("robot-alerts", false, "Output alerts (drift + proactive) as JSON for AI agents")
 	// Robot output filters (bv-84)
 	robotMinConf := flag.Float64("robot-min-confidence", 0.0, "Filter robot outputs by minimum confidence (0.0-1.0)")
@@ -197,6 +198,12 @@ func main() {
 		fmt.Println("      Outputs label health metrics as JSON (velocity, freshness, flow, criticality).")
 		fmt.Println("      Includes label summaries, detailed metrics, and cross-label dependencies.")
 		fmt.Println("      Key fields: health_level (healthy|warning|critical), velocity_score, flow_score.")
+		fmt.Println("")
+		fmt.Println("  --robot-label-flow")
+		fmt.Println("      Outputs cross-label dependency flow as JSON (label->label edges).")
+		fmt.Println("      Key fields: labels[], flow_matrix[from][to], dependencies[{from,to,count,issue_ids}],")
+		fmt.Println("                  bottleneck_labels (highest outgoing), total_cross_label_deps.")
+		fmt.Println("      Use when you need to see which labels are blocking others at a glance.")
 		fmt.Println("")
 		fmt.Println("  --robot-alerts")
 		fmt.Println("      Outputs drift + proactive alerts as JSON (staleness, cascades, density, cycles).")
@@ -423,6 +430,36 @@ func main() {
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(output); err != nil {
 			fmt.Fprintf(os.Stderr, "Error encoding label health: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	// Handle --robot-label-flow (can be used stand-alone to avoid full health computation)
+	if *robotLabelFlow {
+		cfg := analysis.DefaultLabelHealthConfig()
+		flow := analysis.ComputeCrossLabelFlow(issues, cfg)
+		output := struct {
+			GeneratedAt string                     `json:"generated_at"`
+			DataHash    string                     `json:"data_hash"`
+			Flow        analysis.CrossLabelFlow    `json:"flow"`
+			Config      analysis.LabelHealthConfig `json:"analysis_config"`
+			UsageHints  []string                   `json:"usage_hints"`
+		}{
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+			DataHash:    dataHash,
+			Flow:        flow,
+			Config:      cfg,
+			UsageHints: []string{
+				"jq '.flow.bottleneck_labels' - labels blocking the most others",
+				"jq '.flow.dependencies[] | select(.issue_count > 0) | {from:.from_label,to:.to_label,count:.issue_count}'",
+				"jq '.flow.flow_matrix' - raw matrix (row=from, col=to, align with .flow.labels)",
+			},
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(output); err != nil {
+			fmt.Fprintf(os.Stderr, "Error encoding label flow: %v\n", err)
 			os.Exit(1)
 		}
 		os.Exit(0)

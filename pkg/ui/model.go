@@ -50,6 +50,7 @@ const (
 	focusQuitConfirm
 	focusTimeTravelInput
 	focusHistory
+	focusLabelDashboard
 )
 
 // UpdateMsg is sent when a new version is available

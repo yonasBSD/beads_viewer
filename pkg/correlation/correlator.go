@@ -142,17 +142,19 @@ func (c *Correlator) buildHistories(beads []BeadInfo, events []BeadEvent, commit
 
 	// Group events by bead ID
 	eventsByBead := make(map[string][]BeadEvent)
+	// Also index bead IDs by SHA for efficient commit correlation
+	beadsBySHA := make(map[string][]string)
 	for _, event := range events {
 		eventsByBead[event.BeadID] = append(eventsByBead[event.BeadID], event)
+		beadsBySHA[event.CommitSHA] = append(beadsBySHA[event.CommitSHA], event.BeadID)
 	}
 
-	// Group commits by bead ID (from event association)
+	// Group commits by bead ID (using SHA index)
 	commitsByBead := make(map[string][]CorrelatedCommit)
 	for _, commit := range commits {
-		// Find which bead(s) this commit relates to by checking events
-		for _, event := range events {
-			if event.CommitSHA == commit.SHA {
-				commitsByBead[event.BeadID] = append(commitsByBead[event.BeadID], commit)
+		if beadIDs, ok := beadsBySHA[commit.SHA]; ok {
+			for _, beadID := range beadIDs {
+				commitsByBead[beadID] = append(commitsByBead[beadID], commit)
 			}
 		}
 	}

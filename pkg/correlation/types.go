@@ -83,6 +83,7 @@ type FileChange struct {
 
 // CorrelatedCommit represents a code commit linked to a bead with confidence metadata
 type CorrelatedCommit struct {
+	BeadID      string            `json:"-"` // Internal use for linking
 	SHA         string            `json:"sha"`
 	ShortSHA    string            `json:"short_sha"`
 	Message     string            `json:"message"`
