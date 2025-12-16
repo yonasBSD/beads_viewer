@@ -75,6 +75,7 @@ func TestInsightsCurrentPanelItemCount(t *testing.T) {
 		Stats:        analysis.NewGraphStatsForTest(nil, nil, nil, nil, nil, nil, nil, nil, nil, 0, nil),
 	}
 	m := NewInsightsModel(ins, map[string]*model.Issue{}, DefaultTheme(nil))
+	m.SetTopPicks([]analysis.TopPick{{ID: "P1", Score: 1.0}})
 	counts := []int{m.currentPanelItemCount()}
 	for i := 0; i < int(PanelCount)-1; i++ {
 		m.NextPanel()

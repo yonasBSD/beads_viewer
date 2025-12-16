@@ -550,6 +550,9 @@ func NewModel(issues []model.Issue, activeRecipe *recipe.Recipe, beadsPath strin
 		initialStatusErr = true
 	}
 
+	// Precompute drift/health alerts (bv-168)
+	alerts, alertsCritical, alertsWarning, alertsInfo := computeAlerts(issues, graphStats, analyzer)
+
 	return Model{
 		issues:              issues,
 		issueMap:            issueMap,
@@ -586,6 +589,10 @@ func NewModel(issues []model.Issue, activeRecipe *recipe.Recipe, beadsPath strin
 		statusIsError:       initialStatusErr,
 		historyLoading:      len(issues) > 0, // Will be loaded in Init()
 		// Alerts panel (bv-168)
+		alerts:          alerts,
+		alertsCritical:  alertsCritical,
+		alertsWarning:   alertsWarning,
+		alertsInfo:      alertsInfo,
 		dismissedAlerts: make(map[string]bool),
 	}
 }
@@ -627,7 +634,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.insightsPanel.SetSize(m.width, bodyHeight)
 		m.graphView.SetIssues(m.issues, &ins)
 
-		// Generate priority recommendations now that Phase 2 is ready
+		// Generate triage for priority panel (bv-91)
+		triage := analysis.ComputeTriage(m.issues)
+		m.insightsPanel.SetTopPicks(triage.QuickRef.TopPicks)
 
 		// Generate priority recommendations now that Phase 2 is ready
 		recommendations := m.analyzer.GenerateRecommendations()
@@ -635,6 +644,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i := range recommendations {
 			m.priorityHints[recommendations[i].IssueID] = &recommendations[i]
 		}
+
+		// Refresh alerts now that full Phase 2 metrics (cycles, etc.) are available
+		m.alerts, m.alertsCritical, m.alertsWarning, m.alertsInfo = computeAlerts(m.issues, m.analysis, m.analyzer)
 
 		// Invalidate label health cache since we have new graph metrics (criticality)
 		m.labelHealthCached = false
@@ -803,6 +815,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.countReady++
 			}
 		}
+
+		// Recompute alerts for refreshed dataset
+		m.alerts, m.alertsCritical, m.alertsWarning, m.alertsInfo = computeAlerts(m.issues, m.analysis, m.analyzer)
+		m.dismissedAlerts = make(map[string]bool)
+		m.showAlertsPanel = false
 
 		// Rebuild list items
 		items := make([]list.Item, len(m.issues))
@@ -1140,6 +1157,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.analysis != nil {
 						ins := m.analysis.GenerateInsights(len(m.issues))
 						m.insightsPanel = NewInsightsModel(ins, m.issueMap, m.theme)
+						// Include priority triage (bv-91)
+						triage := analysis.ComputeTriage(m.issues)
+						m.insightsPanel.SetTopPicks(triage.QuickRef.TopPicks)
 						panelHeight := m.height - 2
 						if panelHeight < 3 {
 							panelHeight = 3
@@ -3752,22 +3772,18 @@ func (m *Model) Stop() {
 // ALERTS PANEL (bv-168)
 // ════════════════════════════════════════════════════════════════════════════
 
-// computeAlerts calculates drift alerts for the current issues
-func computeAlerts(issues []model.Issue) ([]drift.Alert, int, int, int) {
-	if len(issues) == 0 {
+// computeAlerts calculates drift alerts for the current issues using the
+// already-computed graph stats/analyzer to avoid redundant work.
+func computeAlerts(issues []model.Issue, stats *analysis.GraphStats, analyzer *analysis.Analyzer) ([]drift.Alert, int, int, int) {
+	if len(issues) == 0 || stats == nil || analyzer == nil {
 		return nil, 0, 0, 0
 	}
 
-	// Load drift config
 	projectDir, _ := os.Getwd()
 	driftConfig, err := drift.LoadConfig(projectDir)
 	if err != nil {
 		driftConfig = drift.DefaultConfig()
 	}
-
-	// Build stats for drift calculator
-	analyzer := analysis.NewAnalyzer(issues)
-	stats := analyzer.Analyze()
 
 	openCount, closedCount, blockedCount := 0, 0, 0
 	for _, issue := range issues {
@@ -3799,7 +3815,6 @@ func computeAlerts(issues []model.Issue) ([]drift.Alert, int, int, int) {
 	calc.SetIssues(issues)
 	result := calc.Calculate()
 
-	// Count by severity
 	critical, warning, info := 0, 0, 0
 	for _, a := range result.Alerts {
 		switch a.Severity {

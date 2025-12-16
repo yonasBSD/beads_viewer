@@ -23,7 +23,8 @@ const (
 	PanelArticulation
 	PanelSlack
 	PanelCycles
-	PanelCount // Sentinel for wrapping
+	PanelPriority // Agent-first priority recommendations
+	PanelCount    // Sentinel for wrapping
 )
 
 // MetricInfo contains explanation for each metric
@@ -119,6 +120,15 @@ var metricDescriptions = map[MetricPanel]MetricInfo{
 		HowToUse:    "Break cycles by removing or reversing a dependency. Refactor to decouple.",
 		FormulaHint: "Detected via Tarjan's SCC algorithm",
 	},
+	PanelPriority: {
+		Icon:        "🎯",
+		Title:       "Priority",
+		ShortDesc:   "Agent-First Triage",
+		WhatIs:      "AI-computed recommendations combining multiple signals into actionable picks.",
+		WhyUseful:   "Provides the single best answer for 'what should I work on next?'",
+		HowToUse:    "Work items top to bottom. High scores = high impact. Check unblocks count.",
+		FormulaHint: "Score = Σ(PageRank + Betweenness + BlockerRatio + Staleness + Priority + TimeToImpact + Urgency + Risk)",
+	},
 }
 
 // InsightsModel is an interactive insights dashboard
@@ -129,6 +139,9 @@ type InsightsModel struct {
 	extraText      string
 	labelAttention []analysis.LabelAttentionScore
 	labelFlow      *analysis.CrossLabelFlow
+
+	// Priority triage data (bv-91)
+	topPicks []analysis.TopPick
 
 	// Navigation state
 	focusedPanel  MetricPanel
@@ -166,6 +179,11 @@ func (m *InsightsModel) SetSize(w, h int) {
 
 func (m *InsightsModel) SetInsights(ins analysis.Insights) {
 	m.insights = ins
+}
+
+// SetTopPicks sets the priority triage recommendations (bv-91)
+func (m *InsightsModel) SetTopPicks(picks []analysis.TopPick) {
+	m.topPicks = picks
 }
 
 // isPanelSkipped returns true and a reason if the metric for this panel was skipped
@@ -281,6 +299,8 @@ func (m *InsightsModel) currentPanelItemCount() int {
 		return len(m.insights.Slack)
 	case PanelCycles:
 		return len(m.insights.Cycles)
+	case PanelPriority:
+		return len(m.topPicks)
 	default:
 		return 0
 	}
@@ -325,6 +345,15 @@ func (m *InsightsModel) SelectedIssueID() string {
 		return ""
 	}
 
+	// For priority panel, return selected TopPick's ID
+	if m.focusedPanel == PanelPriority {
+		idx := m.selectedIndex[PanelPriority]
+		if idx >= 0 && idx < len(m.topPicks) {
+			return m.topPicks[idx].ID
+		}
+		return ""
+	}
+
 	// For other panels, return selected item's ID
 	items := m.getPanelItems(m.focusedPanel)
 	idx := m.selectedIndex[m.focusedPanel]
@@ -354,15 +383,16 @@ func (m *InsightsModel) View() string {
 		mainWidth = m.width - detailWidth - 1
 	}
 
-	// 3-column layout; now 3 rows to accommodate new panels
+	// 3-column layout; 4 rows (3 metric rows + 1 priority row)
 	colWidth := (mainWidth - 6) / 3
 	if colWidth < 25 {
 		colWidth = 25
 	}
 
-	rowHeight := (m.height - 6) / 3
-	if rowHeight < 8 {
-		rowHeight = 8
+	// With 4 rows, reduce individual row height
+	rowHeight := (m.height - 8) / 4
+	if rowHeight < 6 {
+		rowHeight = 6
 	}
 
 	panels := []string{
@@ -380,8 +410,10 @@ func (m *InsightsModel) View() string {
 	row1 := lipgloss.JoinHorizontal(lipgloss.Top, panels[0], panels[1], panels[2])
 	row2 := lipgloss.JoinHorizontal(lipgloss.Top, panels[3], panels[4], panels[5])
 	row3 := lipgloss.JoinHorizontal(lipgloss.Top, panels[6], panels[7], panels[8])
+	// Priority panel spans full width for prominence (bv-91)
+	row4 := m.renderPriorityPanel(mainWidth-2, rowHeight, t)
 
-	mainContent := lipgloss.JoinVertical(lipgloss.Left, row1, row2, row3)
+	mainContent := lipgloss.JoinVertical(lipgloss.Left, row1, row2, row3, row4)
 
 	// Add detail panel if enabled
 	if detailWidth > 0 {
@@ -761,6 +793,191 @@ func (m *InsightsModel) renderCyclesPanel(width, height int, t Theme) string {
 	}
 
 	return panelStyle.Render(sb.String())
+}
+
+// renderPriorityPanel renders the priority recommendations panel (bv-91)
+func (m *InsightsModel) renderPriorityPanel(width, height int, t Theme) string {
+	info := metricDescriptions[PanelPriority]
+	isFocused := m.focusedPanel == PanelPriority
+	picks := m.topPicks
+
+	borderColor := t.Secondary
+	if isFocused {
+		borderColor = t.Primary
+	}
+
+	panelStyle := t.Renderer.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Width(width).
+		Height(height).
+		Padding(0, 1)
+
+	titleStyle := t.Renderer.NewStyle().Bold(true)
+	if isFocused {
+		titleStyle = titleStyle.Foreground(t.Primary)
+	} else {
+		titleStyle = titleStyle.Foreground(t.Secondary)
+	}
+
+	var sb strings.Builder
+
+	// Header
+	headerLine := fmt.Sprintf("%s %s (%d)", info.Icon, info.Title, len(picks))
+	sb.WriteString(titleStyle.Render(headerLine))
+	sb.WriteString("  ")
+
+	// Inline subtitle for horizontal layout
+	subtitleStyle := t.Renderer.NewStyle().Foreground(t.Subtext).Italic(true)
+	sb.WriteString(subtitleStyle.Render(info.ShortDesc))
+	sb.WriteString("\n")
+
+	if len(picks) == 0 {
+		emptyStyle := t.Renderer.NewStyle().
+			Foreground(t.Subtext).
+			Italic(true)
+		sb.WriteString(emptyStyle.Render("No priority recommendations available. Run 'bv --robot-triage' to generate."))
+		return panelStyle.Render(sb.String())
+	}
+
+	selectedIdx := m.selectedIndex[PanelPriority]
+	// For horizontal layout, show items side by side
+	visibleItems := min(len(picks), 5) // Show up to 5 items horizontally
+
+	// Calculate width per item
+	itemWidth := (width - 4) / visibleItems
+	if itemWidth < 30 {
+		itemWidth = 30
+	}
+
+	// Scrolling for selection
+	startIdx := m.scrollOffset[PanelPriority]
+	if selectedIdx >= startIdx+visibleItems {
+		startIdx = selectedIdx - visibleItems + 1
+	}
+	if selectedIdx < startIdx {
+		startIdx = selectedIdx
+	}
+	m.scrollOffset[PanelPriority] = startIdx
+
+	endIdx := startIdx + visibleItems
+	if endIdx > len(picks) {
+		endIdx = len(picks)
+	}
+
+	// Render picks horizontally
+	var pickRenderings []string
+	for i := startIdx; i < endIdx; i++ {
+		pick := picks[i]
+		isSelected := isFocused && i == selectedIdx
+		pickRenderings = append(pickRenderings, m.renderPriorityItem(pick, itemWidth, height-3, isSelected, t))
+	}
+
+	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, pickRenderings...))
+
+	// Scroll indicator
+	if len(picks) > visibleItems {
+		sb.WriteString("\n")
+		scrollInfo := fmt.Sprintf("◀ %d/%d ▶", selectedIdx+1, len(picks))
+		scrollStyle := t.Renderer.NewStyle().
+			Foreground(t.Subtext).
+			Align(lipgloss.Center).
+			Width(width - 4)
+		sb.WriteString(scrollStyle.Render(scrollInfo))
+	}
+
+	return panelStyle.Render(sb.String())
+}
+
+// renderPriorityItem renders a single priority recommendation item
+func (m *InsightsModel) renderPriorityItem(pick analysis.TopPick, width, height int, isSelected bool, t Theme) string {
+	itemStyle := t.Renderer.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Width(width - 2).
+		Height(height - 1).
+		Padding(0, 1)
+
+	if isSelected {
+		itemStyle = itemStyle.BorderForeground(t.Primary)
+	} else {
+		itemStyle = itemStyle.BorderForeground(t.Secondary)
+	}
+
+	var sb strings.Builder
+
+	// Selection indicator + Score badge
+	if isSelected {
+		sb.WriteString(t.Renderer.NewStyle().Foreground(t.Primary).Bold(true).Render("▸ "))
+	} else {
+		sb.WriteString("  ")
+	}
+
+	// Score badge
+	scoreStr := fmt.Sprintf("%.2f", pick.Score)
+	scoreStyle := t.Renderer.NewStyle().
+		Background(lipgloss.AdaptiveColor{Light: "#E8E8E8", Dark: "#3D3D3D"}).
+		Foreground(t.Primary).
+		Bold(true).
+		Padding(0, 1)
+	sb.WriteString(scoreStyle.Render(scoreStr))
+	sb.WriteString("\n")
+
+	// Issue details
+	issue := m.issueMap[pick.ID]
+	if issue != nil {
+		// Type icon + Status
+		icon, iconColor := t.GetTypeIcon(string(issue.IssueType))
+		statusColor := t.GetStatusColor(string(issue.Status))
+
+		sb.WriteString(t.Renderer.NewStyle().Foreground(iconColor).Render(icon))
+		sb.WriteString(" ")
+		sb.WriteString(t.Renderer.NewStyle().Foreground(statusColor).Bold(true).Render(strings.ToUpper(string(issue.Status))))
+		sb.WriteString(" ")
+		sb.WriteString(GetPriorityIcon(issue.Priority))
+		sb.WriteString(fmt.Sprintf("P%d", issue.Priority))
+		sb.WriteString("\n")
+
+		// Title (truncated)
+		titleWidth := width - 6
+		title := truncateRunesHelper(issue.Title, titleWidth, "…")
+		titleStyle := t.Renderer.NewStyle()
+		if isSelected {
+			titleStyle = titleStyle.Foreground(t.Primary).Bold(true)
+		}
+		sb.WriteString(titleStyle.Render(title))
+		sb.WriteString("\n")
+	} else {
+		// Fallback to ID + Title from pick
+		idStyle := t.Renderer.NewStyle().Foreground(t.Secondary)
+		sb.WriteString(idStyle.Render(pick.ID))
+		sb.WriteString("\n")
+		titleStyle := t.Renderer.NewStyle()
+		if isSelected {
+			titleStyle = titleStyle.Foreground(t.Primary).Bold(true)
+		}
+		sb.WriteString(titleStyle.Render(truncateRunesHelper(pick.Title, width-6, "…")))
+		sb.WriteString("\n")
+	}
+
+	// Unblocks indicator
+	if pick.Unblocks > 0 {
+		unblockStyle := t.Renderer.NewStyle().Foreground(t.Open).Bold(true)
+		sb.WriteString(unblockStyle.Render(fmt.Sprintf("↳ Unblocks %d", pick.Unblocks)))
+		sb.WriteString("\n")
+	}
+
+	// Reasons (compact)
+	reasonStyle := t.Renderer.NewStyle().Foreground(t.Subtext).Italic(true)
+	for i, reason := range pick.Reasons {
+		if i >= 2 { // Show max 2 reasons
+			break
+		}
+		reasonTrunc := truncateRunesHelper(reason, width-8, "…")
+		sb.WriteString(reasonStyle.Render("• " + reasonTrunc))
+		sb.WriteString("\n")
+	}
+
+	return itemStyle.Render(sb.String())
 }
 
 func (m *InsightsModel) renderCycleChain(cycle []string, maxWidth int, t Theme) string {

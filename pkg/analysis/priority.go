@@ -80,12 +80,16 @@ func (a *Analyzer) ComputeImpactScores() []ImpactScore {
 
 // ComputeImpactScoresAt calculates impact scores as of a specific time
 func (a *Analyzer) ComputeImpactScoresAt(now time.Time) []ImpactScore {
+	stats := a.Analyze()
+	return a.ComputeImpactScoresFromStats(&stats, now)
+}
+
+// ComputeImpactScoresFromStats calculates impact scores using provided graph stats
+func (a *Analyzer) ComputeImpactScoresFromStats(stats *GraphStats, now time.Time) []ImpactScore {
 	// Handle empty issue set
 	if len(a.issueMap) == 0 {
 		return nil
 	}
-
-	stats := a.Analyze()
 
 	// Get thread-safe copies of Phase 2 data
 	pageRank := stats.PageRank()
@@ -126,7 +130,7 @@ func (a *Analyzer) ComputeImpactScoresAt(now time.Time) []ImpactScore {
 		urgencyNorm, urgencyExplanation := computeUrgency(&issue, now)
 
 		// Compute risk signals (bv-82)
-		riskSignals := ComputeRiskSignals(&issue, &stats, a.issueMap, now)
+		riskSignals := ComputeRiskSignals(&issue, stats, a.issueMap, now)
 
 		// Compute weighted score
 		breakdown := ScoreBreakdown{

@@ -22,6 +22,7 @@ func TestRenderSparkline(t *testing.T) {
 		{"Underflow", -0.5, 5},
 		{"Width1", 0.5, 1},
 		{"Width0", 0.5, 0}, // Edge case
+		{"VerySmall", 0.01, 5},
 	}
 
 	for _, tt := range tests {
@@ -39,6 +40,12 @@ func TestRenderSparkline(t *testing.T) {
 			}
 			if strings.Count(got, "\n") > 0 {
 				t.Errorf("RenderSparkline contains newlines")
+			}
+			// Verify visibility for non-zero small values
+			if tt.name == "VerySmall" && tt.width > 0 {
+				if strings.TrimSpace(got) == "" {
+					t.Errorf("RenderSparkline should show visible bar for small values, got empty/spaces: '%s'", got)
+				}
 			}
 		})
 	}

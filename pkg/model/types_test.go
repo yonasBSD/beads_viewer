@@ -121,6 +121,7 @@ func TestDependencyType_IsBlocking(t *testing.T) {
 		{"Blocks", DepBlocks, true},
 		{"Related", DepRelated, false},
 		{"ParentChild", DepParentChild, false},
+		{"Legacy (Empty)", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

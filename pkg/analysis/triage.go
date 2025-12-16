@@ -178,12 +178,12 @@ func ComputeTriageWithOptions(issues []model.Issue, opts TriageOptions) TriageRe
 	analyzer := NewAnalyzer(issues)
 	stats := analyzer.AnalyzeAsync()
 
-	if opts.WaitForPhase2 {
-		stats.WaitForPhase2()
-	}
+	// Triage requires advanced metrics (PageRank, etc.) for scoring, so we must wait
+	// independently of opts.WaitForPhase2 (which was previously redundant as ComputeImpactScores waited anyway)
+	stats.WaitForPhase2()
 
-	// Compute impact scores
-	impactScores := analyzer.ComputeImpactScores()
+	// Compute impact scores using the already-computed stats
+	impactScores := analyzer.ComputeImpactScoresFromStats(stats, time.Now())
 
 	// Get execution plan for unblock analysis (currently unused but kept for future phases)
 	_ = analyzer.GetExecutionPlan()

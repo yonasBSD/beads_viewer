@@ -347,6 +347,26 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Get project directory for baseline operations (moved up to allow info check without loading issues)
+	projectDir, _ := os.Getwd()
+	baselinePath := baseline.DefaultPath(projectDir)
+
+	// Handle --baseline-info
+	if *baselineInfo {
+		if !baseline.Exists(baselinePath) {
+			fmt.Println("No baseline found.")
+			fmt.Println("Create one with: bv --save-baseline \"description\"")
+			os.Exit(0)
+		}
+		bl, err := baseline.Load(baselinePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading baseline: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(bl.Summary())
+		os.Exit(0)
+	}
+
 	// Validate recipe name if provided (before loading issues)
 	var activeRecipe *recipe.Recipe
 	if *recipeName != "" {
@@ -668,26 +688,6 @@ func main() {
 	// Handle --profile-startup
 	if *profileStartup {
 		runProfileStartup(issues, loadDuration, *profileJSON, *forceFullAnalysis)
-		os.Exit(0)
-	}
-
-	// Get project directory for baseline operations
-	projectDir, _ := os.Getwd()
-	baselinePath := baseline.DefaultPath(projectDir)
-
-	// Handle --baseline-info
-	if *baselineInfo {
-		if !baseline.Exists(baselinePath) {
-			fmt.Println("No baseline found.")
-			fmt.Println("Create one with: bv --save-baseline \"description\"")
-			os.Exit(0)
-		}
-		bl, err := baseline.Load(baselinePath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error loading baseline: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Print(bl.Summary())
 		os.Exit(0)
 	}
 
