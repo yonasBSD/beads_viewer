@@ -114,8 +114,15 @@ func main() {
 	emitScript := flag.Bool("emit-script", false, "Emit shell script for top-N recommendations (agent workflows)")
 	scriptLimit := flag.Int("script-limit", 5, "Limit number of items in emitted script (use with --emit-script)")
 	scriptFormat := flag.String("script-format", "bash", "Script format: bash, fish, or zsh (use with --emit-script)")
+	// Feedback loop flags (bv-90)
+	feedbackAccept := flag.String("feedback-accept", "", "Record accept feedback for issue ID (tunes recommendation weights)")
+	feedbackIgnore := flag.String("feedback-ignore", "", "Record ignore feedback for issue ID (tunes recommendation weights)")
+	feedbackReset := flag.Bool("feedback-reset", false, "Reset all feedback data to defaults")
+	feedbackShow := flag.Bool("feedback-show", false, "Show current feedback status and weight adjustments")
 	// Priority brief export (bv-96)
 	priorityBrief := flag.String("priority-brief", "", "Export priority brief to Markdown file (e.g., brief.md)")
+	// Agent brief bundle (bv-131)
+	agentBrief := flag.String("agent-brief", "", "Export agent brief bundle to directory (includes triage.json, insights.json, brief.md, helpers.md)")
 	// Static pages export flags (bv-73f)
 	exportPages := flag.String("export-pages", "", "Export static site to directory (e.g., ./bv-pages)")
 	pagesTitle := flag.String("pages-title", "", "Custom title for static site")
@@ -138,6 +145,7 @@ func main() {
 	_ = capacityAgents
 	_ = capacityLabel
 	_ = labelScope
+	_ = agentBrief
 
 	envRobot := os.Getenv("BV_ROBOT") == "1"
 	stdoutIsTTY := term.IsTerminal(int(os.Stdout.Fd()))
@@ -572,6 +580,97 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	}
+
+	// Handle feedback commands (bv-90)
+	if *feedbackAccept != "" || *feedbackIgnore != "" || *feedbackReset || *feedbackShow {
+		beadsDir, err := loader.GetBeadsDir("")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error getting beads directory: %v\n", err)
+			os.Exit(1)
+		}
+
+		feedback, err := analysis.LoadFeedback(beadsDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading feedback: %v\n", err)
+			os.Exit(1)
+		}
+
+		if *feedbackReset {
+			feedback.Reset()
+			if err := feedback.Save(beadsDir); err != nil {
+				fmt.Fprintf(os.Stderr, "Error saving feedback: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("Feedback data reset to defaults.")
+			os.Exit(0)
+		}
+
+		if *feedbackShow {
+			feedbackJSON := feedback.ToJSON()
+			data, _ := json.MarshalIndent(feedbackJSON, "", "  ")
+			fmt.Println(string(data))
+			os.Exit(0)
+		}
+
+		// For accept/ignore, we need to get the issue's score breakdown
+		if *feedbackAccept != "" || *feedbackIgnore != "" {
+			issueID := *feedbackAccept
+			action := "accept"
+			if *feedbackIgnore != "" {
+				issueID = *feedbackIgnore
+				action = "ignore"
+			}
+
+			// Load issues to get score breakdown
+			issues, err := loader.LoadIssues("")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error loading issues: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Find the issue
+			var foundIssue *model.Issue
+			for i := range issues {
+				if issues[i].ID == issueID {
+					foundIssue = &issues[i]
+					break
+				}
+			}
+
+			if foundIssue == nil {
+				fmt.Fprintf(os.Stderr, "Issue not found: %s\n", issueID)
+				os.Exit(1)
+			}
+
+			// Compute impact score for the issue to get breakdown
+			an := analysis.NewAnalyzer(issues)
+			scores := an.ComputeImpactScores()
+
+			var score float64
+			var breakdown analysis.ScoreBreakdown
+			for _, s := range scores {
+				if s.IssueID == issueID {
+					score = s.Score
+					breakdown = s.Breakdown
+					break
+				}
+			}
+
+			if err := feedback.RecordFeedback(issueID, action, score, breakdown); err != nil {
+				fmt.Fprintf(os.Stderr, "Error recording feedback: %v\n", err)
+				os.Exit(1)
+			}
+
+			if err := feedback.Save(beadsDir); err != nil {
+				fmt.Fprintf(os.Stderr, "Error saving feedback: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Recorded %s feedback for %s (score: %.3f)\n", action, issueID, score)
+			fmt.Println(feedback.Summary())
+			os.Exit(0)
+		}
 	}
 
 	// Load recipes (needed for both --robot-recipes and --recipe)
@@ -1910,6 +2009,92 @@ func main() {
 		}
 
 		fmt.Printf("Done! Priority brief saved to %s\n", *priorityBrief)
+		os.Exit(0)
+	}
+
+
+	// Handle --agent-brief flag (bv-131)
+	if *agentBrief != "" {
+		fmt.Printf("Generating agent brief bundle to %s/...\n", *agentBrief)
+
+		// Create output directory
+		if err := os.MkdirAll(*agentBrief, 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating directory: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Generate triage data
+		triage := analysis.ComputeTriage(issues)
+		triageJSON, err := json.MarshalIndent(triage, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshaling triage: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(filepath.Join(*agentBrief, "triage.json"), triageJSON, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing triage.json: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("  → triage.json")
+
+		// Generate insights
+		analyzer := analysis.NewAnalyzer(issues)
+		stats := analyzer.Analyze()
+		insights := stats.GenerateInsights(50)
+		insightsJSON, err := json.MarshalIndent(insights, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error marshaling insights: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(filepath.Join(*agentBrief, "insights.json"), insightsJSON, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing insights.json: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("  → insights.json")
+
+		// Generate priority brief
+		config := export.DefaultPriorityBriefConfig()
+		config.DataHash = dataHash
+		brief, err := export.GeneratePriorityBriefFromTriageJSON(triageJSON, config)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating brief: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(filepath.Join(*agentBrief, "brief.md"), []byte(brief), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing brief.md: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("  → brief.md")
+
+		// Generate jq helpers
+		helpers := generateJQHelpers()
+		if err := os.WriteFile(filepath.Join(*agentBrief, "helpers.md"), []byte(helpers), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing helpers.md: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("  → helpers.md")
+
+		// Generate meta.json with hash and config
+		meta := struct {
+			GeneratedAt string   `json:"generated_at"`
+			DataHash    string   `json:"data_hash"`
+			IssueCount  int      `json:"issue_count"`
+			Version     string   `json:"version"`
+			Files       []string `json:"files"`
+		}{
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+			DataHash:    dataHash,
+			IssueCount:  len(issues),
+			Version:     "1.0.0",
+			Files:       []string{"triage.json", "insights.json", "brief.md", "helpers.md", "meta.json"},
+		}
+		metaJSON, _ := json.MarshalIndent(meta, "", "  ")
+		if err := os.WriteFile(filepath.Join(*agentBrief, "meta.json"), metaJSON, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing meta.json: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("  → meta.json")
+
+		fmt.Printf("\nDone! Agent brief bundle saved to %s/\n", *agentBrief)
 		os.Exit(0)
 	}
 
@@ -4039,4 +4224,88 @@ func generateIdealLine(sprint *model.Sprint, totalIssues int) []model.BurndownPo
 	}
 
 	return points
+}
+
+// generateJQHelpers creates a markdown document with jq snippets for agent brief
+func generateJQHelpers() string {
+	return `# jq Helper Snippets
+
+Quick reference for extracting data from the agent brief JSON files.
+
+## triage.json
+
+### Top Picks
+` + "```bash" + `
+# Get top 3 recommendations
+jq '.quick_ref.top_picks[:3]' triage.json
+
+# Get IDs of top picks
+jq '.quick_ref.top_picks[].id' triage.json
+
+# Get top pick with highest unblocks
+jq '.quick_ref.top_picks | max_by(.unblocks)' triage.json
+` + "```" + `
+
+### Recommendations
+` + "```bash" + `
+# List all recommendations with scores
+jq '.recommendations[] | {id, score, action}' triage.json
+
+# Filter high-score items (score > 0.15)
+jq '.recommendations[] | select(.score > 0.15)' triage.json
+
+# Get breakdown metrics
+jq '.recommendations[] | {id, pr: .breakdown.pagerank_norm, bw: .breakdown.betweenness_norm}' triage.json
+` + "```" + `
+
+### Quick Wins
+` + "```bash" + `
+# List quick wins
+jq '.quick_wins[] | {id, title, reason}' triage.json
+
+# Count quick wins
+jq '.quick_wins | length' triage.json
+` + "```" + `
+
+### Blockers
+` + "```bash" + `
+# Get actionable blockers
+jq '.blockers_to_clear[] | select(.actionable)' triage.json
+
+# Sort by unblocks count
+jq '.blockers_to_clear | sort_by(-.unblocks_count)' triage.json
+` + "```" + `
+
+## insights.json
+
+### Graph Metrics
+` + "```bash" + `
+# Top PageRank issues
+jq '.top_pagerank | to_entries | sort_by(-.value)[:5]' insights.json
+
+# Top betweenness centrality
+jq '.top_betweenness | to_entries | sort_by(-.value)[:5]' insights.json
+
+# Find hub issues (high in-degree)
+jq '.top_in_degree | to_entries | sort_by(-.value)[:3]' insights.json
+` + "```" + `
+
+### Project Health
+` + "```bash" + `
+# Get velocity metrics
+jq '.velocity' insights.json
+
+# List critical issues
+jq '.critical_issues' insights.json
+` + "```" + `
+
+## Combining Files
+` + "```bash" + `
+# Cross-reference top picks with insights
+jq -s '.[0].quick_ref.top_picks[0].id as $id | .[1].top_pagerank[$id] // 0' triage.json insights.json
+
+# Export summary to CSV
+jq -r '.recommendations[] | [.id, .score, .action] | @csv' triage.json
+` + "```" + `
+`
 }
