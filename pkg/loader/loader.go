@@ -116,7 +116,8 @@ func LoadIssuesFromFile(path string) ([]model.Issue, error) {
 	scanner := bufio.NewScanner(file)
 	// Increase buffer size for large lines (issues can be large)
 	const maxCapacity = 1024 * 1024 * 10 // 10MB
-	buf := make([]byte, maxCapacity)
+	// Start with 64KB buffer, grow up to maxCapacity
+	buf := make([]byte, 64*1024)
 	scanner.Buffer(buf, maxCapacity)
 
 	lineNum := 0
