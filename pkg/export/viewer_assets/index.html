@@ -119,26 +119,30 @@
 
           <!-- Navigation tabs -->
           <nav class="flex space-x-1">
-            <button @click="view = 'dashboard'"
-                    :class="view === 'dashboard' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
-                    class="px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            <a href="#/"
+               @click.prevent="window.location.hash = '#/'"
+               :class="view === 'dashboard' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
+               class="px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer">
               Dashboard
-            </button>
-            <button @click="view = 'issues'"
-                    :class="view === 'issues' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
-                    class="px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            </a>
+            <a href="#/issues"
+               @click.prevent="window.location.hash = '#/issues'"
+               :class="view === 'issues' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
+               class="px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer">
               Issues
-            </button>
-            <button @click="view = 'insights'"
-                    :class="view === 'insights' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
-                    class="px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            </a>
+            <a href="#/insights"
+               @click.prevent="window.location.hash = '#/insights'"
+               :class="view === 'insights' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
+               class="px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer">
               Insights
-            </button>
-            <button @click="view = 'graph'"
-                    :class="view === 'graph' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
-                    class="px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            </a>
+            <a href="#/graph"
+               @click.prevent="window.location.hash = '#/graph'"
+               :class="view === 'graph' ? 'bg-beads-100 text-beads-700 dark:bg-beads-900 dark:text-beads-200' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'"
+               class="px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer">
               Graph
-            </button>
+            </a>
           </nav>
 
           <!-- Actions -->
@@ -675,18 +679,20 @@
          x-transition:leave-start="opacity-100"
          x-transition:leave-end="opacity-0"
          class="fixed inset-0 z-50 overflow-y-auto"
-         @keydown.escape.window="selectedIssue = null">
+         @keydown.escape.window="closeIssue()">
       <div class="flex items-center justify-center min-h-screen px-4">
-        <div class="fixed inset-0 bg-black/50" @click="selectedIssue = null"></div>
+        <div class="fixed inset-0 bg-black/50" @click="closeIssue()"></div>
         <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-2xl w-full max-h-[80vh] overflow-y-auto">
           <template x-if="selectedIssue">
             <div class="p-6">
               <div class="flex items-start justify-between mb-4">
                 <div>
-                  <span class="text-sm font-mono text-gray-500 dark:text-gray-400" x-text="selectedIssue.id"></span>
+                  <a :href="'#/issue/' + encodeURIComponent(selectedIssue.id)"
+                     class="text-sm font-mono text-beads-600 dark:text-beads-400 hover:underline"
+                     x-text="selectedIssue.id"></a>
                   <h2 class="text-xl font-semibold mt-1" x-text="selectedIssue.title"></h2>
                 </div>
-                <button @click="selectedIssue = null" class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
+                <button @click="closeIssue()" class="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
                   <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
                   </svg>

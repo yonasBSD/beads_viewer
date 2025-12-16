@@ -949,6 +949,123 @@ function syncFiltersToURL(view, filters, sort, searchQuery) {
 }
 
 // ============================================================================
+// Router - Hash-based SPA navigation
+// ============================================================================
+
+/**
+ * Route definitions with pattern matching
+ * :param syntax for dynamic segments
+ */
+const ROUTES = [
+  { pattern: '/', view: 'dashboard' },
+  { pattern: '/issues', view: 'issues' },
+  { pattern: '/issue/:id', view: 'issue' },
+  { pattern: '/insights', view: 'insights' },
+  { pattern: '/graph', view: 'graph' },
+];
+
+/**
+ * Parse hash into view and params
+ */
+function parseRoute(hash) {
+  // Remove leading # and extract path vs query
+  const hashContent = hash.slice(1) || '/';
+  const [path, query] = hashContent.split('?');
+  const normalizedPath = path.startsWith('/') ? path : '/' + path;
+
+  // Try to match each route pattern
+  for (const route of ROUTES) {
+    const match = matchPattern(route.pattern, normalizedPath);
+    if (match) {
+      return {
+        view: route.view,
+        params: match.params,
+        query: query ? new URLSearchParams(query) : new URLSearchParams(),
+      };
+    }
+  }
+
+  // Default to dashboard
+  return { view: 'dashboard', params: {}, query: new URLSearchParams() };
+}
+
+/**
+ * Match a URL path against a pattern with :param placeholders
+ */
+function matchPattern(pattern, path) {
+  const patternParts = pattern.split('/').filter(Boolean);
+  const pathParts = path.split('/').filter(Boolean);
+
+  // Handle root route
+  if (patternParts.length === 0 && pathParts.length === 0) {
+    return { params: {} };
+  }
+
+  if (patternParts.length !== pathParts.length) {
+    return null;
+  }
+
+  const params = {};
+  for (let i = 0; i < patternParts.length; i++) {
+    const patternPart = patternParts[i];
+    const pathPart = pathParts[i];
+
+    if (patternPart.startsWith(':')) {
+      // Dynamic segment - capture as param
+      params[patternPart.slice(1)] = decodeURIComponent(pathPart);
+    } else if (patternPart !== pathPart) {
+      // Static segment mismatch
+      return null;
+    }
+  }
+
+  return { params };
+}
+
+/**
+ * Navigate to a route (pushes to history)
+ */
+function navigate(path) {
+  const newHash = path.startsWith('#') ? path : '#' + path;
+  if (window.location.hash !== newHash) {
+    window.location.hash = newHash;
+  }
+}
+
+/**
+ * Navigate to issue detail
+ */
+function navigateToIssue(id) {
+  navigate(`/issue/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Navigate to issues list with filters
+ */
+function navigateToIssues(filters = {}, sort = 'priority', search = '') {
+  const params = filtersToURL(filters, sort, search);
+  navigate(`/issues${params ? '?' + params : ''}`);
+}
+
+/**
+ * Navigate to dashboard
+ */
+function navigateToDashboard() {
+  navigate('/');
+}
+
+/**
+ * Go back in history, or to a fallback
+ */
+function goBack(fallback = '/') {
+  if (window.history.length > 1) {
+    window.history.back();
+  } else {
+    navigate(fallback);
+  }
+}
+
+// ============================================================================
 // Alpine.js Application
 // ============================================================================
 
@@ -1085,17 +1202,13 @@ function beadsApp() {
         // Load filter options for dropdowns
         this.filterOptions = getFilterOptions();
 
-        // Restore filters from URL if present
-        const urlState = filtersFromURL();
-        if (Object.keys(urlState.filters).length > 0) {
-          this.filters = { ...this.filters, ...urlState.filters };
-          this.sort = urlState.sort;
-          this.searchQuery = urlState.searchQuery;
-          this.view = 'issues'; // Switch to issues view if filters in URL
-        }
-
-        // Load issues for list view
+        // Load issues for list view (initial data)
         this.loadIssues();
+
+        // Handle initial route from URL hash
+        if (window.location.hash) {
+          this.handleHashChange();
+        }
 
         // Initialize WASM graph engine (non-blocking)
         this.loadingMessage = 'Loading graph engine...';
@@ -1122,20 +1235,42 @@ function beadsApp() {
       const urlState = filtersFromURL();
       const hash = window.location.hash;
 
-      // Determine view from hash
-      if (hash.startsWith('#/issues')) {
-        this.view = 'issues';
-        this.filters = { ...this.filters, ...urlState.filters };
-        this.sort = urlState.sort;
-        this.searchQuery = urlState.searchQuery;
-        this.page = 1;
-        this.loadIssues();
-      } else if (hash.startsWith('#/insights')) {
-        this.view = 'insights';
-      } else if (hash.startsWith('#/graph')) {
-        this.view = 'graph';
-      } else {
-        this.view = 'dashboard';
+      // Parse route
+      const route = parseRoute(hash);
+
+      // Handle route
+      switch (route.view) {
+        case 'issue':
+          // Issue detail view
+          this.view = 'issues'; // Keep issues as backdrop
+          if (route.params.id) {
+            this.selectedIssue = getIssue(route.params.id);
+          }
+          break;
+
+        case 'issues':
+          this.view = 'issues';
+          this.selectedIssue = null;
+          this.filters = { ...this.filters, ...urlState.filters };
+          this.sort = urlState.sort;
+          this.searchQuery = urlState.searchQuery;
+          this.page = 1;
+          this.loadIssues();
+          break;
+
+        case 'insights':
+          this.view = 'insights';
+          this.selectedIssue = null;
+          break;
+
+        case 'graph':
+          this.view = 'graph';
+          this.selectedIssue = null;
+          break;
+
+        default:
+          this.view = 'dashboard';
+          this.selectedIssue = null;
       }
     },
 
@@ -1249,10 +1384,24 @@ function beadsApp() {
     },
 
     /**
-     * Show issue detail
+     * Show issue detail (navigates to issue route)
      */
     showIssue(id) {
-      this.selectedIssue = getIssue(id);
+      navigateToIssue(id);
+    },
+
+    /**
+     * Close issue detail (navigates back)
+     */
+    closeIssue() {
+      // Try to go back; fallback to issues list or dashboard
+      const currentView = this.view;
+      this.selectedIssue = null;
+      if (currentView === 'issues') {
+        navigateToIssues(this.filters, this.sort, this.searchQuery);
+      } else {
+        navigate('/' + currentView);
+      }
     },
 
     /**
@@ -1344,10 +1493,17 @@ window.beadsViewer = {
   getUniqueLabels,
   searchIssues,
 
-  // URL State
+  // URL State & Router
   filtersToURL,
   filtersFromURL,
   syncFiltersToURL,
+  parseRoute,
+  matchPattern,
+  navigate,
+  navigateToIssue,
+  navigateToIssues,
+  navigateToDashboard,
+  goBack,
 
   // Graph Engine
   GRAPH_STATE,
