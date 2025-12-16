@@ -174,31 +174,37 @@ async function initWasm() {
 function buildWasmGraph() {
     if (!store.wasmReady) return;
 
-    const { DiGraph } = window.bvGraphWasm;
+    try {
+        const { DiGraph } = window.bvGraphWasm;
 
-    if (store.wasmGraph) {
-        store.wasmGraph.free();
-    }
+        if (store.wasmGraph) {
+            store.wasmGraph.free();
+            store.wasmGraph = null;
+        }
 
-    store.wasmGraph = DiGraph.withCapacity(store.issues.length, store.dependencies.length);
+        store.wasmGraph = DiGraph.withCapacity(store.issues.length, store.dependencies.length);
 
-    // Add all nodes
-    store.issues.forEach(issue => {
-        store.wasmGraph.addNode(issue.id);
-    });
-
-    // Add blocking edges
-    store.dependencies
-        .filter(d => d.type === 'blocks' || !d.type)
-        .forEach(d => {
-            const fromIdx = store.wasmGraph.nodeIdx(d.issue_id);
-            const toIdx = store.wasmGraph.nodeIdx(d.depends_on_id);
-            if (fromIdx !== undefined && toIdx !== undefined) {
-                store.wasmGraph.addEdge(fromIdx, toIdx);
-            }
+        // Add all nodes
+        store.issues.forEach(issue => {
+            store.wasmGraph.addNode(issue.id);
         });
 
-    console.log(`[bv-graph] WASM graph: ${store.wasmGraph.nodeCount()} nodes, ${store.wasmGraph.edgeCount()} edges`);
+        // Add blocking edges
+        store.dependencies
+            .filter(d => d.type === 'blocks' || !d.type)
+            .forEach(d => {
+                const fromIdx = store.wasmGraph.nodeIdx(d.issue_id);
+                const toIdx = store.wasmGraph.nodeIdx(d.depends_on_id);
+                if (fromIdx !== undefined && toIdx !== undefined) {
+                    store.wasmGraph.addEdge(fromIdx, toIdx);
+                }
+            });
+
+        console.log(`[bv-graph] WASM graph: ${store.wasmGraph.nodeCount()} nodes, ${store.wasmGraph.edgeCount()} edges`);
+    } catch (e) {
+        console.warn('[bv-graph] Failed to build WASM graph:', e);
+        store.wasmGraph = null;
+    }
 }
 
 function computeMetrics() {
@@ -495,8 +501,8 @@ function drawNode(node, ctx, globalScale) {
     ctx.save();
     ctx.globalAlpha = opacity;
 
-    // Glow effect for important nodes
-    if (node.pagerank > 0.5 || isHovered || isSelected) {
+    // Glow effect for important nodes (PageRank sums to 1.0, so threshold ~2x average)
+    if (node.pagerank > 0.03 || isHovered || isSelected) {
         ctx.shadowColor = color;
         ctx.shadowBlur = isHovered ? 20 : 10;
     }
@@ -608,7 +614,8 @@ function drawLink(link, ctx, globalScale) {
     const start = link.source;
     const end = link.target;
 
-    if (!start.x || !end.x) return;
+    // Check for undefined coordinates (not falsy - 0 is valid)
+    if (start.x === undefined || end.x === undefined) return;
 
     const color = getLinkColor(link);
     const opacity = getLinkOpacity(link);
@@ -634,6 +641,12 @@ function drawLink(link, ctx, globalScale) {
     // Arrowhead
     const endSize = getNodeSize(end);
     const arrowLen = Math.min(10, 8 / globalScale);
+
+    // Skip arrow if nodes overlap (dist too small)
+    if (dist < endSize + 1) {
+        ctx.restore();
+        return;
+    }
 
     // Calculate arrow position (at edge of target node)
     const t = 1 - endSize / dist;

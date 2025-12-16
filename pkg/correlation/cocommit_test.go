@@ -442,8 +442,6 @@ func TestCalculateConfidence_Combined(t *testing.T) {
 	}
 }
 
-
-
 func TestExtractNewPath_DoubleSlashBug(t *testing.T) {
 	// Git output for renaming "pkg/old/file.go" to "pkg/file.go"
 	// is "pkg/{old => }/file.go"

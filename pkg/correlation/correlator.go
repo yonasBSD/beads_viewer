@@ -135,10 +135,10 @@ func (c *Correlator) buildHistories(beads []BeadInfo, events []BeadEvent, commit
 	// Initialize histories from bead list
 	for _, bead := range beads {
 		histories[bead.ID] = BeadHistory{
-			BeadID: bead.ID,
-			Title:  bead.Title,
-			Status: bead.Status,
-			Events: []BeadEvent{},
+			BeadID:  bead.ID,
+			Title:   bead.Title,
+			Status:  bead.Status,
+			Events:  []BeadEvent{},
 			Commits: []CorrelatedCommit{},
 		}
 	}

@@ -759,9 +759,10 @@
         }
 
         function updateViewModeUI(mode) {
-            // Update buttons
-            document.querySelectorAll('.toolbar-group button').forEach(btn => {
-                btn.classList.remove('active');
+            // Update only view mode buttons (not other toolbar buttons)
+            const viewModeButtons = ['btn-force', 'btn-hierarchy', 'btn-radial', 'btn-cluster'];
+            viewModeButtons.forEach(id => {
+                document.getElementById(id)?.classList.remove('active');
             });
 
             const modeMap = {
