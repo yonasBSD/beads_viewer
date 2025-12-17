@@ -10,19 +10,20 @@ set -e
 BENCHMARK_DIR="benchmarks"
 BASELINE_FILE="$BENCHMARK_DIR/baseline.txt"
 CURRENT_FILE="$BENCHMARK_DIR/current.txt"
+BENCH_PACKAGES=(./pkg/analysis/... ./pkg/ui/... ./pkg/export/...)
 
 mkdir -p "$BENCHMARK_DIR"
 
 run_benchmarks() {
     echo "Running benchmarks..."
-    go test -bench=. -benchmem -count=3 ./pkg/analysis/... 2>&1 | tee "$CURRENT_FILE"
+    go test -bench=. -benchmem -count=3 "${BENCH_PACKAGES[@]}" 2>&1 | tee "$CURRENT_FILE"
     echo ""
     echo "Results saved to $CURRENT_FILE"
 }
 
 save_baseline() {
     echo "Running benchmarks and saving as baseline..."
-    go test -bench=. -benchmem -count=3 ./pkg/analysis/... 2>&1 | tee "$BASELINE_FILE"
+    go test -bench=. -benchmem -count=3 "${BENCH_PACKAGES[@]}" 2>&1 | tee "$BASELINE_FILE"
     echo ""
     echo "Baseline saved to $BASELINE_FILE"
 }
@@ -55,8 +56,8 @@ compare_benchmarks() {
 # Quick benchmarks for CI (subset of critical tests)
 run_quick() {
     echo "Running quick benchmarks (CI mode)..."
-    go test -bench='BenchmarkFullAnalysis_(Sparse100|Dense100|ManyCycles20)' \
-            -benchmem -count=1 ./pkg/analysis/... 2>&1 | tee "$CURRENT_FILE"
+    go test -bench='Benchmark(FullAnalysis_(Sparse100|Dense100|ManyCycles20)|GraphModel_Rebuild_Layered1000|GraphSnapshot_BuildLayoutAndRenderSVG_Layered1000)' \
+            -benchmem -count=1 "${BENCH_PACKAGES[@]}" 2>&1 | tee "$CURRENT_FILE"
 }
 
 case "${1:-run}" in
