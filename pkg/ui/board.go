@@ -7,6 +7,8 @@ import (
 
 	"github.com/Dicklesworthstone/beads_viewer/pkg/model"
 
+	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -17,6 +19,12 @@ type BoardModel struct {
 	focusedCol   int    // Index into activeColIdx
 	selectedRow  [4]int // Store selection for each column
 	theme        Theme
+
+	// Detail panel (bv-r6kh)
+	showDetail   bool
+	detailVP     viewport.Model
+	mdRenderer   *glamour.TermRenderer
+	lastDetailID string // Track which issue detail is currently rendered
 }
 
 // Column indices for the Kanban board
@@ -81,10 +89,19 @@ func NewBoardModel(issues []model.Issue, theme Theme) BoardModel {
 		sortIssuesByPriorityAndDate(cols[i])
 	}
 
+	// Initialize markdown renderer for detail panel (bv-r6kh)
+	var mdRenderer *glamour.TermRenderer
+	mdRenderer, _ = glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(60),
+	)
+
 	b := BoardModel{
 		columns:    cols,
 		focusedCol: 0,
 		theme:      theme,
+		detailVP:   viewport.New(40, 20),
+		mdRenderer: mdRenderer,
 	}
 	b.updateActiveColumns()
 	return b
@@ -202,6 +219,38 @@ func (b *BoardModel) PageUp(visibleRows int) {
 	b.selectedRow[col] = newRow
 }
 
+// Detail panel methods (bv-r6kh)
+
+// ToggleDetail toggles the detail panel visibility
+func (b *BoardModel) ToggleDetail() {
+	b.showDetail = !b.showDetail
+}
+
+// ShowDetail shows the detail panel
+func (b *BoardModel) ShowDetail() {
+	b.showDetail = true
+}
+
+// HideDetail hides the detail panel
+func (b *BoardModel) HideDetail() {
+	b.showDetail = false
+}
+
+// IsDetailShown returns whether detail panel is visible
+func (b *BoardModel) IsDetailShown() bool {
+	return b.showDetail
+}
+
+// DetailScrollDown scrolls the detail panel down
+func (b *BoardModel) DetailScrollDown(lines int) {
+	b.detailVP.LineDown(lines)
+}
+
+// DetailScrollUp scrolls the detail panel up
+func (b *BoardModel) DetailScrollUp(lines int) {
+	b.detailVP.LineUp(lines)
+}
+
 // SelectedIssue returns the currently selected issue, or nil if none
 func (b *BoardModel) SelectedIssue() *model.Issue {
 	col := b.actualFocusedCol()
@@ -245,13 +294,28 @@ func (b BoardModel) View(width, height int) string {
 			Render("No issues to display")
 	}
 
+	// Calculate board width vs detail panel width (bv-r6kh)
+	// Detail panel takes ~35% of width when shown, min 40 chars
+	boardWidth := width
+	detailWidth := 0
+	if b.showDetail && width > 120 {
+		detailWidth = width * 35 / 100
+		if detailWidth < 40 {
+			detailWidth = 40
+		}
+		if detailWidth > 80 {
+			detailWidth = 80
+		}
+		boardWidth = width - detailWidth - 1 // 1 char gap
+	}
+
 	// Calculate column widths - distribute space evenly
 	// Minimum column width for readability, NO maximum cap (bv-ic17)
 	minColWidth := 28
 
 	// Calculate available width (subtract gaps between columns)
 	gaps := numCols - 1
-	availableWidth := width - (gaps * 2) // 2 chars gap between columns
+	availableWidth := boardWidth - (gaps * 2) // 2 chars gap between columns
 
 	// Distribute width evenly across columns, respecting minimum
 	baseWidth := availableWidth / numCols
@@ -376,7 +440,15 @@ func (b BoardModel) View(width, height int) string {
 	}
 
 	// Join columns with gaps
-	return lipgloss.JoinHorizontal(lipgloss.Top, renderedCols...)
+	boardView := lipgloss.JoinHorizontal(lipgloss.Top, renderedCols...)
+
+	// Add detail panel if shown (bv-r6kh)
+	if detailWidth > 0 {
+		detailPanel := b.renderDetailPanel(detailWidth, height-2)
+		return lipgloss.JoinHorizontal(lipgloss.Top, boardView, detailPanel)
+	}
+
+	return boardView
 }
 
 // renderCard creates a visually rich card for an issue with Stripe-level polish
@@ -486,4 +558,123 @@ func (b BoardModel) renderCard(issue model.Issue, width int, selected bool, colI
 	}
 
 	return cardStyle.Render(lipgloss.JoinVertical(lipgloss.Left, line1, line2, line3))
+}
+
+// renderDetailPanel renders the detail panel for the selected issue (bv-r6kh)
+func (b *BoardModel) renderDetailPanel(width, height int) string {
+	t := b.theme
+
+	// Get the selected issue
+	issue := b.SelectedIssue()
+
+	// Update viewport dimensions
+	vpWidth := width - 4 // Account for border
+	vpHeight := height - 6
+	if vpWidth < 20 {
+		vpWidth = 20
+	}
+	if vpHeight < 5 {
+		vpHeight = 5
+	}
+	b.detailVP.Width = vpWidth
+	b.detailVP.Height = vpHeight
+
+	// Build content
+	var content strings.Builder
+
+	if issue == nil {
+		content.WriteString("## No Selection\n\n")
+		content.WriteString("Navigate to a card with **h/l** and **j/k** to see details here.\n\n")
+		content.WriteString("Press **Tab** to hide this panel.")
+	} else {
+		// Only update content if the issue changed
+		if b.lastDetailID != issue.ID {
+			b.lastDetailID = issue.ID
+
+			// Header with ID and type
+			icon, _ := t.GetTypeIcon(string(issue.IssueType))
+			content.WriteString(fmt.Sprintf("## %s %s\n\n", icon, issue.ID))
+
+			// Title
+			content.WriteString(fmt.Sprintf("**%s**\n\n", issue.Title))
+
+			// Status and Priority
+			statusIcon := GetStatusIcon(string(issue.Status))
+			prioIcon := GetPriorityIcon(issue.Priority)
+			content.WriteString(fmt.Sprintf("%s %s  %s P%d\n\n",
+				statusIcon, issue.Status, prioIcon, issue.Priority))
+
+			// Metadata section
+			if issue.Assignee != "" {
+				content.WriteString(fmt.Sprintf("**Assignee:** @%s\n\n", issue.Assignee))
+			}
+
+			if len(issue.Labels) > 0 {
+				content.WriteString(fmt.Sprintf("**Labels:** %s\n\n", strings.Join(issue.Labels, ", ")))
+			}
+
+			// Dependencies
+			if len(issue.Dependencies) > 0 {
+				content.WriteString("**Blocked by:**\n")
+				for _, dep := range issue.Dependencies {
+					content.WriteString(fmt.Sprintf("- %s\n", dep))
+				}
+				content.WriteString("\n")
+			}
+
+			// Description
+			if issue.Description != "" {
+				content.WriteString("---\n\n")
+				content.WriteString(issue.Description)
+				content.WriteString("\n")
+			}
+
+			// Timestamps
+			content.WriteString("\n---\n\n")
+			content.WriteString(fmt.Sprintf("*Created: %s*\n", FormatTimeRel(issue.CreatedAt)))
+			content.WriteString(fmt.Sprintf("*Updated: %s*\n", FormatTimeRel(issue.UpdatedAt)))
+
+			// Render with markdown
+			rendered := content.String()
+			if b.mdRenderer != nil {
+				if md, err := b.mdRenderer.Render(rendered); err == nil {
+					rendered = md
+				}
+			}
+			b.detailVP.SetContent(rendered)
+			b.detailVP.GotoTop()
+		}
+	}
+
+	// Build scroll indicator
+	var sb strings.Builder
+	sb.WriteString(b.detailVP.View())
+
+	scrollPercent := b.detailVP.ScrollPercent()
+	if scrollPercent < 1.0 || b.detailVP.YOffset > 0 {
+		scrollHint := t.Renderer.NewStyle().
+			Foreground(t.Secondary).
+			Italic(true).
+			Render(fmt.Sprintf("─ %d%% ─ ctrl+j/k", int(scrollPercent*100)))
+		sb.WriteString("\n")
+		sb.WriteString(scrollHint)
+	}
+
+	// Panel border style
+	panelStyle := t.Renderer.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(t.Primary).
+		Width(width).
+		Height(height).
+		Padding(0, 1)
+
+	// Title bar
+	titleBar := t.Renderer.NewStyle().
+		Bold(true).
+		Foreground(t.Primary).
+		Width(width - 4).
+		Align(lipgloss.Center).
+		Render("DETAILS")
+
+	return panelStyle.Render(lipgloss.JoinVertical(lipgloss.Left, titleBar, sb.String()))
 }

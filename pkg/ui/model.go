@@ -2076,6 +2076,19 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) Model {
 		m.board.PageDown(m.height / 3)
 	case "ctrl+u":
 		m.board.PageUp(m.height / 3)
+	case "tab":
+		// Toggle detail panel (bv-r6kh)
+		m.board.ToggleDetail()
+	case "ctrl+j":
+		// Scroll detail panel down (bv-r6kh)
+		if m.board.IsDetailShown() {
+			m.board.DetailScrollDown(3)
+		}
+	case "ctrl+k":
+		// Scroll detail panel up (bv-r6kh)
+		if m.board.IsDetailShown() {
+			m.board.DetailScrollUp(3)
+		}
 	case "enter":
 		if selected := m.board.SelectedIssue(); selected != nil {
 			// Find and select in list

@@ -153,7 +153,9 @@ func (s *ShortcutsSidebar) allSections() []shortcutSection {
 			items: []shortcutItem{
 				{"h/l", "Columns ←/→"},
 				{"j/k", "Items ↓/↑"},
-				{"Enter", "Details"},
+				{"Tab", "Toggle detail"},
+				{"^j/^k", "Scroll detail"},
+				{"Enter", "Full view"},
 			},
 		},
 		{
