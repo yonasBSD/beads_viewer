@@ -18,9 +18,6 @@ func TestNewStreamExtractor(t *testing.T) {
 	if s.repoPath != "/tmp/test" {
 		t.Errorf("repoPath = %s, want /tmp/test", s.repoPath)
 	}
-	if s.commitPattern == nil {
-		t.Error("commitPattern should not be nil")
-	}
 	if len(s.beadsFiles) == 0 {
 		t.Error("beadsFiles should not be empty")
 	}

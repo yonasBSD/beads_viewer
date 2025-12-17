@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -21,10 +20,9 @@ type ProgressCallback func(processed, total int)
 
 // StreamExtractor provides memory-efficient streaming extraction of bead events
 type StreamExtractor struct {
-	repoPath      string
-	beadsFiles    []string
-	progressCB    ProgressCallback
-	commitPattern *regexp.Regexp
+	repoPath   string
+	beadsFiles []string
+	progressCB ProgressCallback
 }
 
 // NewStreamExtractor creates a new streaming extractor
@@ -36,7 +34,6 @@ func NewStreamExtractor(repoPath string) *StreamExtractor {
 			".beads/beads.base.jsonl",
 			".beads/issues.jsonl",
 		},
-		commitPattern: regexp.MustCompile(`^[0-9a-f]{40}\x00`),
 	}
 }
 
@@ -181,8 +178,8 @@ func (s *StreamExtractor) parseStream(r io.Reader, filterBeadID string, closedSi
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Check for new commit header
-		if s.commitPattern.MatchString(line) {
+		// Check for new commit header (uses package-level compiled regex)
+		if commitPattern.MatchString(line) {
 			// Process previous commit if exists
 			if currentCommit != nil {
 				commitEvents := s.processCommitBuffer(currentCommit, filterBeadID, closedSince)
