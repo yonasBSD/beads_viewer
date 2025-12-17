@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"context"
 	"os"
 	"sort"
 	"testing"
@@ -21,7 +22,7 @@ func TestMetricStatusAndFullStatsLimits(t *testing.T) {
 	defer os.Unsetenv("BV_INSIGHTS_MAP_LIMIT")
 
 	cached := NewCachedAnalyzer(issues, nil)
-	stats := cached.AnalyzeAsync()
+	stats := cached.AnalyzeAsync(context.Background())
 	stats.WaitForPhase2()
 
 	status := stats.Status()

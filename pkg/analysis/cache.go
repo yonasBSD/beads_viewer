@@ -259,7 +259,7 @@ func (ca *CachedAnalyzer) SetConfig(config *AnalysisConfig) {
 }
 
 // AnalyzeAsync returns cached stats if available, otherwise computes and caches.
-func (ca *CachedAnalyzer) AnalyzeAsync() *GraphStats {
+func (ca *CachedAnalyzer) AnalyzeAsync(ctx context.Context) *GraphStats {
 	// Combined key: dataHash|configHash
 	fullHash := ca.dataHash + "|" + ca.configHash
 
@@ -271,7 +271,7 @@ func (ca *CachedAnalyzer) AnalyzeAsync() *GraphStats {
 
 	// Cache miss - compute fresh
 	ca.cacheHit = false
-	stats := ca.Analyzer.AnalyzeAsync(context.Background())
+	stats := ca.Analyzer.AnalyzeAsync(ctx)
 
 	// Store in cache when Phase 2 completes
 	go func() {
@@ -286,7 +286,7 @@ func (ca *CachedAnalyzer) AnalyzeAsync() *GraphStats {
 // Note: This returns a value copy that shares map references with the original.
 // This is safe because the maps are immutable after Phase 2 completion.
 func (ca *CachedAnalyzer) Analyze() GraphStats {
-	stats := ca.AnalyzeAsync()
+	stats := ca.AnalyzeAsync(context.Background())
 	stats.WaitForPhase2()
 	return GraphStats{
 		OutDegree:         stats.OutDegree,
