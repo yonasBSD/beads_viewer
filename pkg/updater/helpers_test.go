@@ -71,6 +71,26 @@ func TestParseChecksums(t *testing.T) {
 	}
 }
 
+func TestParseChecksums_FilenamesWithSpaces(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "checksums.txt")
+
+	content := "" +
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  bv 1.0.0 windows amd64.tar.gz\n" +
+		"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write checksums: %v", err)
+	}
+
+	m, err := parseChecksums(path)
+	if err != nil {
+		t.Fatalf("parseChecksums failed: %v", err)
+	}
+	if got := m["bv 1.0.0 windows amd64.tar.gz"]; got != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("unexpected checksum for spaced filename: %q", got)
+	}
+}
+
 func TestVerifyChecksum(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "file.bin")
