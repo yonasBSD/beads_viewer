@@ -471,7 +471,7 @@ func TestVelocityInvariance_FixedNow(t *testing.T) {
 		},
 	}
 
-	velocity := computeProjectVelocity(issues, now, 8)
+	velocity := ComputeProjectVelocity(issues, now, 8)
 
 	// Verify ClosedLast7Days: only closed_recent (3 days ago)
 	if velocity.ClosedLast7Days != 1 {
@@ -508,7 +508,7 @@ func TestVelocityInvariance_EstimatedFallback(t *testing.T) {
 		},
 	}
 
-	velocity := computeProjectVelocity(issues, now, 8)
+	velocity := ComputeProjectVelocity(issues, now, 8)
 
 	// Should be marked as estimated
 	if !velocity.Estimated {
@@ -540,7 +540,7 @@ func TestVelocityInvariance_WeekBucketing(t *testing.T) {
 		{ID: "w3", Status: model.StatusClosed, CreatedAt: now.Add(-30 * 24 * time.Hour), ClosedAt: &closedMon3},
 	}
 
-	velocity := computeProjectVelocity(issues, now, 4)
+	velocity := ComputeProjectVelocity(issues, now, 4)
 
 	// Weekly[0] = current week (Dec 15), should have 1 (closedMon1 on Dec 15)
 	// Weekly[1] = previous week (Dec 8), should have 1 (closedMon2 on Dec 10)
@@ -578,7 +578,7 @@ func TestVelocityInvariance_AvgDaysToClose(t *testing.T) {
 		{ID: "slow", Status: model.StatusClosed, CreatedAt: created2, ClosedAt: &closed2},
 	}
 
-	velocity := computeProjectVelocity(issues, now, 8)
+	velocity := ComputeProjectVelocity(issues, now, 8)
 
 	// Average = (5 + 10) / 2 = 7.5 days
 	expectedAvg := 7.5
@@ -592,7 +592,7 @@ func TestVelocityInvariance_AvgDaysToClose(t *testing.T) {
 // TestVelocityInvariance_Empty tests empty input.
 func TestVelocityInvariance_Empty(t *testing.T) {
 	now := time.Date(2025, 12, 16, 12, 0, 0, 0, time.UTC)
-	velocity := computeProjectVelocity(nil, now, 8)
+	velocity := ComputeProjectVelocity(nil, now, 8)
 
 	if velocity.ClosedLast7Days != 0 {
 		t.Errorf("empty: ClosedLast7Days should be 0, got %d", velocity.ClosedLast7Days)
@@ -614,7 +614,7 @@ func TestVelocityInvariance_OnlyOpenIssues(t *testing.T) {
 		{ID: "open2", Status: model.StatusInProgress},
 	}
 
-	velocity := computeProjectVelocity(issues, now, 8)
+	velocity := ComputeProjectVelocity(issues, now, 8)
 
 	if velocity.ClosedLast7Days != 0 {
 		t.Errorf("only open: ClosedLast7Days should be 0, got %d", velocity.ClosedLast7Days)
@@ -636,7 +636,7 @@ func TestVelocityInvariance_Determinism(t *testing.T) {
 	// Run multiple times
 	var firstResult *Velocity
 	for i := 0; i < 5; i++ {
-		result := computeProjectVelocity(issues, now, 8)
+		result := ComputeProjectVelocity(issues, now, 8)
 		if firstResult == nil {
 			firstResult = result
 		} else {

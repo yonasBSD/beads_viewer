@@ -135,10 +135,19 @@ type VelocityWeek struct {
 	Closed    int       `json:"closed"`
 }
 
-// computeProjectVelocity rolls up closure velocity for the whole project.
+// ComputeProjectVelocity rolls up closure velocity for the whole project.
 // It looks back `weeks` ISO weeks (default 8) using closed_at timestamps when
 // available; if missing, it marks the result as estimated.
-func computeProjectVelocity(issues []model.Issue, now time.Time, weeks int) *Velocity {
+//
+// This is the canonical velocity computation used by triage. It returns:
+//   - ClosedLast7Days: issues closed in the last 7 days
+//   - ClosedLast30Days: issues closed in the last 30 days
+//   - AvgDaysToClose: average time from creation to closure
+//   - Weekly: per-week closure counts (newest first)
+//   - Estimated: true if any closure dates were approximated
+//
+// Use a fixed `now` for deterministic/testable results.
+func ComputeProjectVelocity(issues []model.Issue, now time.Time, weeks int) *Velocity {
 	if weeks <= 0 {
 		weeks = 8
 	}
@@ -380,7 +389,7 @@ func ComputeTriageWithOptionsAndTime(issues []model.Issue, opts TriageOptions, n
 	}
 
 	elapsed := time.Since(start)
-	projectVelocity := computeProjectVelocity(issues, now.UTC(), 8)
+	projectVelocity := ComputeProjectVelocity(issues, now.UTC(), 8)
 
 	// bv-87: Build grouped recommendations if requested
 	var recsByTrack []TrackRecommendationGroup
