@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Dicklesworthstone/beads_viewer/pkg/agents"
 	"github.com/Dicklesworthstone/beads_viewer/pkg/analysis"
 	"github.com/Dicklesworthstone/beads_viewer/pkg/baseline"
 	"github.com/Dicklesworthstone/beads_viewer/pkg/correlation"
@@ -56,7 +57,8 @@ const (
 	focusHistory
 	focusAttention
 	focusLabelPicker
-	focusSprint // Sprint dashboard view (bv-161)
+	focusSprint      // Sprint dashboard view (bv-161)
+	focusAgentPrompt // AGENTS.md integration prompt (bv-i8dk)
 )
 
 // SortMode represents the current list sorting mode (bv-3ita)
@@ -143,6 +145,41 @@ func CheckUpdateCmd() tea.Cmd {
 type HistoryLoadedMsg struct {
 	Report *correlation.HistoryReport
 	Error  error
+}
+
+// AgentFileCheckMsg is sent after checking for AGENTS.md integration (bv-i8dk)
+type AgentFileCheckMsg struct {
+	ShouldPrompt bool
+	FilePath     string
+	FileType     string
+}
+
+// CheckAgentFileCmd returns a command that checks if we should prompt for AGENTS.md
+func CheckAgentFileCmd(workDir string) tea.Cmd {
+	return func() tea.Msg {
+		if workDir == "" {
+			return AgentFileCheckMsg{ShouldPrompt: false}
+		}
+
+		// Check if we should prompt based on preferences
+		if !agents.ShouldPromptForAgentFile(workDir) {
+			return AgentFileCheckMsg{ShouldPrompt: false}
+		}
+
+		// Detect agent file
+		detection := agents.DetectAgentFile(workDir)
+
+		// Only prompt if file exists but doesn't have our blurb
+		if detection.Found() && detection.NeedsBlurb() {
+			return AgentFileCheckMsg{
+				ShouldPrompt: true,
+				FilePath:     detection.FilePath,
+				FileType:     detection.FileType,
+			}
+		}
+
+		return AgentFileCheckMsg{ShouldPrompt: false}
+	}
 }
 
 // LoadHistoryCmd returns a command that loads history data in the background
@@ -334,6 +371,11 @@ type Model struct {
 	selectedSprint *model.Sprint
 	isSprintView   bool
 	sprintViewText string
+
+	// AGENTS.md integration (bv-i8dk)
+	showAgentPrompt  bool
+	agentPromptModal AgentPromptModal
+	workDir          string // Working directory for agent file detection
 }
 
 // labelCount is a simple label->count pair for display
@@ -734,6 +776,15 @@ func NewModel(issues []model.Issue, activeRecipe *recipe.Recipe, beadsPath strin
 		dismissedAlerts: make(map[string]bool),
 		// Sprint view (bv-161)
 		sprints: sprints,
+		// AGENTS.md integration (bv-i8dk) - workDir derived from beadsPath
+		workDir: func() string {
+			if beadsPath != "" {
+				// beadsPath is like /path/to/project/.beads/beads.jsonl
+				// workDir is /path/to/project
+				return filepath.Dir(filepath.Dir(beadsPath))
+			}
+			return ""
+		}(),
 	}
 }
 
@@ -745,6 +796,10 @@ func (m Model) Init() tea.Cmd {
 	// Start loading history in background
 	if len(m.issues) > 0 {
 		cmds = append(cmds, LoadHistoryCmd(m.issues, m.beadsPath))
+	}
+	// Check for AGENTS.md integration prompt (bv-i8dk)
+	if m.workDir != "" && !m.workspaceMode {
+		cmds = append(cmds, CheckAgentFileCmd(m.workDir))
 	}
 	return tea.Batch(cmds...)
 }
@@ -905,6 +960,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.isSplitView || m.showDetails {
 				m.updateViewportContent()
 			}
+		}
+
+	case AgentFileCheckMsg:
+		// AGENTS.md integration check (bv-i8dk)
+		if msg.ShouldPrompt && msg.FilePath != "" {
+			m.showAgentPrompt = true
+			m.agentPromptModal = NewAgentPromptModal(msg.FilePath, msg.FileType, m.theme)
+			m.focused = focusAgentPrompt
 		}
 
 	case FileChangedMsg:
@@ -1117,6 +1180,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Clear status message on any keypress
 		m.statusMsg = ""
 		m.statusIsError = false
+
+		// Handle AGENTS.md prompt modal (bv-i8dk)
+		if m.showAgentPrompt {
+			m.agentPromptModal, cmd = m.agentPromptModal.Update(msg)
+			cmds = append(cmds, cmd)
+
+			// Check if user made a decision
+			switch m.agentPromptModal.Result() {
+			case AgentPromptAccept:
+				// User accepted - add blurb to file
+				filePath := m.agentPromptModal.FilePath()
+				if err := agents.AppendBlurbToFile(filePath); err != nil {
+					m.statusMsg = "Failed to update " + filepath.Base(filePath) + ": " + err.Error()
+					m.statusIsError = true
+				} else {
+					m.statusMsg = "✓ Added beads instructions to " + filepath.Base(filePath)
+					// Record acceptance
+					_ = agents.RecordAccept(m.workDir)
+				}
+				m.showAgentPrompt = false
+				m.focused = focusList
+			case AgentPromptDecline:
+				// User declined - just dismiss, may ask again next time
+				m.showAgentPrompt = false
+				m.focused = focusList
+			case AgentPromptNeverAsk:
+				// User chose "don't ask again" - save preference
+				_ = agents.RecordDecline(m.workDir, true)
+				m.showAgentPrompt = false
+				m.focused = focusList
+			}
+			return m, tea.Batch(cmds...)
+		}
 
 		// Close label health detail modal if open
 		if m.showLabelHealthDetail {
@@ -2422,6 +2518,9 @@ func (m Model) View() string {
 	// Quit confirmation overlay takes highest priority
 	if m.showQuitConfirm {
 		body = m.renderQuitConfirm()
+	} else if m.showAgentPrompt {
+		// AGENTS.md prompt modal (bv-i8dk)
+		body = m.agentPromptModal.CenterModal(m.width, m.height-1)
 	} else if m.showLabelHealthDetail && m.labelHealthDetail != nil {
 		body = m.renderLabelHealthDetail(*m.labelHealthDetail)
 	} else if m.showLabelGraphAnalysis && m.labelGraphAnalysisResult != nil {
