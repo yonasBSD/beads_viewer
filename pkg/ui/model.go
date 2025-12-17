@@ -1418,7 +1418,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.focused = focusList
 					return m, nil
 				}
-				// At main list - show quit confirmation
+				// At main list - first ESC clears filters, second shows quit confirm
+				if m.hasActiveFilters() {
+					m.clearAllFilters()
+					return m, nil
+				}
+				// No filters active - show quit confirmation
 				m.showQuitConfirm = true
 				m.focused = focusQuitConfirm
 				return m, nil
@@ -3636,6 +3641,28 @@ func (m Model) getDiffStatus(id string) DiffStatus {
 		return DiffStatusModified
 	}
 	return DiffStatusNone
+}
+
+// hasActiveFilters returns true if any filter is currently applied
+// (status filter, label filter, recipe filter, or fuzzy search)
+func (m *Model) hasActiveFilters() bool {
+	// Check status/label/recipe filter
+	if m.currentFilter != "all" {
+		return true
+	}
+	// Check if fuzzy search filter is active
+	if m.list.FilterState() == list.Filtering || m.list.FilterState() == list.FilterApplied {
+		return true
+	}
+	return false
+}
+
+// clearAllFilters resets all filters to their default state
+func (m *Model) clearAllFilters() {
+	m.currentFilter = "all"
+	// Reset the fuzzy search filter by resetting the filter state
+	m.list.ResetFilter()
+	m.applyFilter()
 }
 
 func (m *Model) applyFilter() {
