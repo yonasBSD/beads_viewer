@@ -546,7 +546,8 @@ func cycleKey(cycle []string) string {
 	copy(rotated, unique[minIdx:])
 	copy(rotated[len(unique)-minIdx:], unique[:minIdx])
 
-	return strings.Join(rotated, "|")
+	// Use null byte as separator to avoid collisions with ID characters
+	return strings.Join(rotated, "\x00")
 }
 
 // Summary returns a human-readable summary of drift results

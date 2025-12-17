@@ -35,13 +35,20 @@ func findCyclesSafe(g graph.Directed, limit int) [][]graph.Node {
 
 	// Sort cycles for determinism
 	// 1. By length (ascending - shortest cycles are more interesting/fixable)
-	// 2. By ID of first node (numerical)
+	// 2. By content (lexicographically for stability)
 	sort.Slice(cycles, func(i, j int) bool {
 		if len(cycles[i]) != len(cycles[j]) {
 			return len(cycles[i]) < len(cycles[j])
 		}
-		// Compare first node IDs as tie-breaker (numerical)
-		return cycles[i][0].ID() < cycles[j][0].ID()
+		// Lexicographic comparison of node IDs
+		for k := 0; k < len(cycles[i]); k++ {
+			id1 := cycles[i][k].ID()
+			id2 := cycles[j][k].ID()
+			if id1 != id2 {
+				return id1 < id2
+			}
+		}
+		return false
 	})
 
 	return cycles
