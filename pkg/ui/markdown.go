@@ -73,11 +73,11 @@ func (mr *MarkdownRenderer) Render(markdown string) (string, error) {
 
 // SetWidth updates the word wrap width and recreates the renderer.
 // If the renderer was created with a theme, the theme is preserved.
+// Width is only updated if the new renderer is created successfully.
 func (mr *MarkdownRenderer) SetWidth(width int) {
 	if width == mr.width || width <= 0 {
 		return
 	}
-	mr.width = width
 
 	// If created with a theme, preserve it
 	if mr.useTheme && mr.theme != nil {
@@ -87,6 +87,7 @@ func (mr *MarkdownRenderer) SetWidth(width int) {
 			glamour.WithWordWrap(width),
 		); err == nil {
 			mr.renderer = r
+			mr.width = width
 		}
 		return
 	}
@@ -104,18 +105,20 @@ func (mr *MarkdownRenderer) SetWidth(width int) {
 		glamour.WithWordWrap(width),
 	); err == nil {
 		mr.renderer = r
+		mr.width = width
 	}
 }
 
 // SetWidthWithTheme updates width and recreates renderer with theme colors.
 // This also updates the stored theme for future SetWidth calls.
+// If width is the same but theme differs, the renderer is still recreated with the new theme.
+// Width and theme are only updated if the new renderer is created successfully.
 func (mr *MarkdownRenderer) SetWidthWithTheme(width int, theme Theme) {
-	if width == mr.width || width <= 0 {
+	if width <= 0 {
 		return
 	}
-	mr.width = width
-	mr.theme = &theme
-	mr.useTheme = true
+
+	// Allow recreation even if width is the same (theme might have changed)
 	styleConfig := buildStyleFromTheme(theme, mr.isDark)
 
 	if r, err := glamour.NewTermRenderer(
@@ -123,6 +126,9 @@ func (mr *MarkdownRenderer) SetWidthWithTheme(width int, theme Theme) {
 		glamour.WithWordWrap(width),
 	); err == nil {
 		mr.renderer = r
+		mr.width = width
+		mr.theme = &theme
+		mr.useTheme = true
 	}
 }
 
@@ -142,13 +148,15 @@ func buildStyleFromTheme(theme Theme, isDark bool) ansi.StyleConfig {
 	mutedColor := extractHex(theme.Muted, isDark)
 	blockedColor := extractHex(theme.Blocked, isDark)
 
-	// Base document style
-	var docBg, docFg string
+	// Base document style - Dracula dark background or transparent for light mode
+	var docBgPtr *string
+	var docFg string
 	if isDark {
-		docBg = "#282a36"
+		docBg := "#282a36"
+		docBgPtr = &docBg
 		docFg = "#f8f8f2"
 	} else {
-		docBg = ""
+		docBgPtr = nil // No background for light mode (use terminal default)
 		docFg = "#000000"
 	}
 
@@ -156,7 +164,7 @@ func buildStyleFromTheme(theme Theme, isDark bool) ansi.StyleConfig {
 		Document: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
 				Color:           stringPtr(docFg),
-				BackgroundColor: stringPtr(docBg),
+				BackgroundColor: docBgPtr,
 			},
 			Margin: uintPtr(0),
 		},
@@ -373,7 +381,7 @@ func buildStyleFromTheme(theme Theme, isDark bool) ansi.StyleConfig {
 					Color: stringPtr(mutedColor),
 				},
 				Background: ansi.StylePrimitive{
-					BackgroundColor: stringPtr(docBg),
+					BackgroundColor: docBgPtr,
 				},
 			},
 		},

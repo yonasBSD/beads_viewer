@@ -138,6 +138,43 @@ func TestMarkdownRenderer_SetWidthWithTheme(t *testing.T) {
 	}
 }
 
+func TestMarkdownRenderer_SetWidthWithThemeSameWidth(t *testing.T) {
+	// SetWidthWithTheme should allow updating theme even with same width
+	theme := DefaultTheme(lipgloss.DefaultRenderer())
+	mr := NewMarkdownRendererWithTheme(80, theme)
+
+	originalRenderer := mr.renderer
+
+	// Same width but (conceptually) different theme should recreate renderer
+	mr.SetWidthWithTheme(80, theme)
+
+	// Renderer should be recreated (different instance)
+	if mr.renderer == originalRenderer {
+		t.Error("SetWidthWithTheme with same width should still recreate renderer")
+	}
+	if mr.width != 80 {
+		t.Errorf("expected width 80, got %d", mr.width)
+	}
+}
+
+func TestMarkdownRenderer_SetWidthWithThemeInvalidWidth(t *testing.T) {
+	mr := NewMarkdownRenderer(80)
+	originalRenderer := mr.renderer
+
+	mr.SetWidthWithTheme(0, DefaultTheme(lipgloss.DefaultRenderer()))
+	if mr.width != 80 {
+		t.Error("SetWidthWithTheme with width 0 should not change width")
+	}
+	if mr.renderer != originalRenderer {
+		t.Error("SetWidthWithTheme with width 0 should not change renderer")
+	}
+
+	mr.SetWidthWithTheme(-1, DefaultTheme(lipgloss.DefaultRenderer()))
+	if mr.width != 80 {
+		t.Error("SetWidthWithTheme with negative width should not change width")
+	}
+}
+
 func TestMarkdownRenderer_IsDarkMode(t *testing.T) {
 	mr := NewMarkdownRenderer(80)
 	// Just verify it returns a boolean without panicking
@@ -169,10 +206,20 @@ func TestBuildStyleFromTheme(t *testing.T) {
 	if *darkConfig.Document.Color != "#f8f8f2" {
 		t.Errorf("expected dark mode doc color #f8f8f2, got %s", *darkConfig.Document.Color)
 	}
+	if darkConfig.Document.BackgroundColor == nil {
+		t.Error("expected dark mode BackgroundColor to be set")
+	}
+	if *darkConfig.Document.BackgroundColor != "#282a36" {
+		t.Errorf("expected dark mode bg color #282a36, got %s", *darkConfig.Document.BackgroundColor)
+	}
 
 	// Test light mode
 	lightConfig := buildStyleFromTheme(theme, false)
 	if *lightConfig.Document.Color != "#000000" {
 		t.Errorf("expected light mode doc color #000000, got %s", *lightConfig.Document.Color)
+	}
+	// Light mode should have nil background (use terminal default)
+	if lightConfig.Document.BackgroundColor != nil {
+		t.Errorf("expected light mode BackgroundColor to be nil, got %v", lightConfig.Document.BackgroundColor)
 	}
 }
