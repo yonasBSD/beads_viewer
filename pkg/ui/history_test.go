@@ -1026,6 +1026,10 @@ func TestParseConventionalCommit(t *testing.T) {
 			t.Errorf("parseConventionalCommit(%q).Breaking = %v, want %v",
 				tt.msg, cc.Breaking, tt.wantBreaking)
 		}
+		if cc.Subject != tt.wantSubject {
+			t.Errorf("parseConventionalCommit(%q).Subject = %q, want %q",
+				tt.msg, cc.Subject, tt.wantSubject)
+		}
 	}
 }
 
@@ -1059,16 +1063,16 @@ func TestFormatCycleTime(t *testing.T) {
 		days float64
 		want string
 	}{
-		{0.01, "14m"},      // < 1 hour
-		{0.1, "2.4h"},      // < 1 day
-		{2.5, "2.5d"},      // < 7 days
-		{10, "1.4w"},       // >= 7 days
+		{0.01, "14m"},  // 0.01 * 24 = 0.24 hours < 1, so minutes: 0.24 * 60 = 14.4 → "14m"
+		{0.1, "2.4h"},  // 0.1 * 24 = 2.4 hours >= 1, so "2.4h"
+		{2.5, "2.5d"},  // 2.5 days < 7, so "2.5d"
+		{10, "1.4w"},   // 10 days >= 7, so weeks: 10/7 = 1.43 → "1.4w"
 	}
 
 	for _, tt := range tests {
 		got := formatCycleTime(tt.days)
-		if !strings.HasSuffix(got, tt.want[len(tt.want)-1:]) {
-			t.Errorf("formatCycleTime(%v) = %q, expected similar to %q", tt.days, got, tt.want)
+		if got != tt.want {
+			t.Errorf("formatCycleTime(%v) = %q, want %q", tt.days, got, tt.want)
 		}
 	}
 }
@@ -1356,4 +1360,316 @@ func TestHistoryModel_GitModeEmptyCommitList(t *testing.T) {
 	if h.SelectedGitCommit() != nil {
 		t.Error("SelectedGitCommit() should return nil for empty list")
 	}
+}
+
+// =============================================================================
+// TIMELINE TESTS (bv-1x6o)
+// =============================================================================
+
+func TestBuildTimeline(t *testing.T) {
+	theme := testTheme()
+	now := time.Now()
+
+	tests := []struct {
+		name              string
+		history           correlation.BeadHistory
+		wantEntries       int
+		wantEventTypes    []string
+		wantCommitEntries int
+	}{
+		{
+			name: "full lifecycle with commits",
+			history: correlation.BeadHistory{
+				Title:  "Test Bead",
+				Status: "closed",
+				Milestones: correlation.BeadMilestones{
+					Created: &correlation.BeadEvent{
+						Timestamp: now.Add(-72 * time.Hour),
+					},
+					Claimed: &correlation.BeadEvent{
+						Timestamp: now.Add(-48 * time.Hour),
+						Author:    "alice",
+					},
+					Closed: &correlation.BeadEvent{
+						Timestamp: now,
+					},
+				},
+				Commits: []correlation.CorrelatedCommit{
+					{
+						ShortSHA:   "abc1234",
+						Message:    "Initial fix",
+						Timestamp:  now.Add(-36 * time.Hour),
+						Confidence: 0.95,
+					},
+					{
+						ShortSHA:   "def5678",
+						Message:    "Follow-up",
+						Timestamp:  now.Add(-24 * time.Hour),
+						Confidence: 0.75,
+					},
+				},
+			},
+			wantEntries:       5, // created, claimed, 2 commits, closed
+			wantEventTypes:    []string{"created", "claimed", "closed"},
+			wantCommitEntries: 2,
+		},
+		{
+			name: "only created event",
+			history: correlation.BeadHistory{
+				Title:  "New Bead",
+				Status: "open",
+				Milestones: correlation.BeadMilestones{
+					Created: &correlation.BeadEvent{
+						Timestamp: now.Add(-24 * time.Hour),
+					},
+				},
+				Commits: []correlation.CorrelatedCommit{},
+			},
+			wantEntries:       1,
+			wantEventTypes:    []string{"created"},
+			wantCommitEntries: 0,
+		},
+		{
+			name: "with reopened event",
+			history: correlation.BeadHistory{
+				Title:  "Reopened Bead",
+				Status: "open",
+				Milestones: correlation.BeadMilestones{
+					Created: &correlation.BeadEvent{
+						Timestamp: now.Add(-96 * time.Hour),
+					},
+					Closed: &correlation.BeadEvent{
+						Timestamp: now.Add(-48 * time.Hour),
+					},
+					Reopened: &correlation.BeadEvent{
+						Timestamp: now.Add(-24 * time.Hour),
+					},
+				},
+				Commits: []correlation.CorrelatedCommit{},
+			},
+			wantEntries:       3, // created, closed, reopened
+			wantEventTypes:    []string{"created", "closed", "reopened"},
+			wantCommitEntries: 0,
+		},
+		{
+			name: "empty history",
+			history: correlation.BeadHistory{
+				Title:      "Empty",
+				Status:     "open",
+				Milestones: correlation.BeadMilestones{},
+				Commits:    []correlation.CorrelatedCommit{},
+			},
+			wantEntries:       0,
+			wantEventTypes:    []string{},
+			wantCommitEntries: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := &correlation.HistoryReport{
+				Histories: map[string]correlation.BeadHistory{
+					"bv-test": tt.history,
+				},
+			}
+			h := NewHistoryModel(report, theme)
+
+			entries := h.buildTimeline(tt.history)
+
+			// Check total count
+			if len(entries) != tt.wantEntries {
+				t.Errorf("buildTimeline() returned %d entries, want %d", len(entries), tt.wantEntries)
+			}
+
+			// Count event types
+			eventCount := 0
+			commitCount := 0
+			foundEvents := make(map[string]bool)
+			for _, e := range entries {
+				if e.EntryType == timelineEntryEvent {
+					eventCount++
+					foundEvents[e.EventType] = true
+				} else if e.EntryType == timelineEntryCommit {
+					commitCount++
+				}
+			}
+
+			if commitCount != tt.wantCommitEntries {
+				t.Errorf("buildTimeline() returned %d commit entries, want %d", commitCount, tt.wantCommitEntries)
+			}
+
+			// Check expected event types
+			for _, et := range tt.wantEventTypes {
+				if !foundEvents[et] {
+					t.Errorf("buildTimeline() missing expected event type: %s", et)
+				}
+			}
+
+			// Verify chronological order
+			for i := 1; i < len(entries); i++ {
+				if entries[i].Timestamp.Before(entries[i-1].Timestamp) {
+					t.Errorf("buildTimeline() entries not in chronological order at index %d", i)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration time.Duration
+		want     string
+	}{
+		{
+			name:     "minutes",
+			duration: 30 * time.Minute,
+			want:     "30m",
+		},
+		{
+			name:     "hours",
+			duration: 5 * time.Hour,
+			want:     "5h",
+		},
+		{
+			name:     "one day",
+			duration: 24 * time.Hour,
+			want:     "1d",
+		},
+		{
+			name:     "multiple days",
+			duration: 7 * 24 * time.Hour,
+			want:     "7d",
+		},
+		{
+			name:     "less than hour",
+			duration: 45 * time.Minute,
+			want:     "45m",
+		},
+		{
+			name:     "exactly one day",
+			duration: 25 * time.Hour, // 1 day + 1 hour rounds to 1d
+			want:     "1d",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatDuration(tt.duration)
+			if got != tt.want {
+				t.Errorf("formatDuration(%v) = %q, want %q", tt.duration, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderCompactTimeline(t *testing.T) {
+	theme := testTheme()
+	now := time.Now()
+
+	tests := []struct {
+		name           string
+		history        correlation.BeadHistory
+		maxWidth       int
+		wantContains   []string
+		wantNotContain []string
+	}{
+		{
+			name: "full lifecycle",
+			history: correlation.BeadHistory{
+				Title:  "Test",
+				Status: "closed",
+				Milestones: correlation.BeadMilestones{
+					Created: &correlation.BeadEvent{Timestamp: now.Add(-72 * time.Hour)},
+					Claimed: &correlation.BeadEvent{Timestamp: now.Add(-48 * time.Hour)},
+					Closed:  &correlation.BeadEvent{Timestamp: now},
+				},
+				Commits: []correlation.CorrelatedCommit{
+					{ShortSHA: "abc", Timestamp: now.Add(-24 * time.Hour)},
+				},
+				CycleTime: &correlation.CycleTime{
+					CreateToClose: durationPtr(72 * time.Hour),
+				},
+			},
+			maxWidth:     100,
+			wantContains: []string{"○", "●", "✓", "├", "3d cycle", "1 commit"},
+		},
+		{
+			name: "many commits truncated",
+			history: correlation.BeadHistory{
+				Title:  "Test",
+				Status: "open",
+				Milestones: correlation.BeadMilestones{
+					Created: &correlation.BeadEvent{Timestamp: now.Add(-24 * time.Hour)},
+				},
+				Commits: []correlation.CorrelatedCommit{
+					{ShortSHA: "a1", Timestamp: now.Add(-20 * time.Hour)},
+					{ShortSHA: "a2", Timestamp: now.Add(-16 * time.Hour)},
+					{ShortSHA: "a3", Timestamp: now.Add(-12 * time.Hour)},
+					{ShortSHA: "a4", Timestamp: now.Add(-8 * time.Hour)},
+					{ShortSHA: "a5", Timestamp: now.Add(-4 * time.Hour)},
+					{ShortSHA: "a6", Timestamp: now.Add(-2 * time.Hour)},
+					{ShortSHA: "a7", Timestamp: now.Add(-1 * time.Hour)},
+				},
+			},
+			maxWidth:     100,
+			wantContains: []string{"○", "├", "…", "7 commits"},
+		},
+		{
+			name: "empty history",
+			history: correlation.BeadHistory{
+				Title:      "Empty",
+				Status:     "open",
+				Milestones: correlation.BeadMilestones{},
+				Commits:    []correlation.CorrelatedCommit{},
+			},
+			maxWidth:     100,
+			wantContains: []string{"no timeline data"},
+		},
+		{
+			name: "single commit",
+			history: correlation.BeadHistory{
+				Title:  "Single",
+				Status: "open",
+				Milestones: correlation.BeadMilestones{
+					Created: &correlation.BeadEvent{Timestamp: now.Add(-24 * time.Hour)},
+				},
+				Commits: []correlation.CorrelatedCommit{
+					{ShortSHA: "xyz", Timestamp: now.Add(-12 * time.Hour)},
+				},
+			},
+			maxWidth:     100,
+			wantContains: []string{"1 commit"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := &correlation.HistoryReport{
+				Histories: map[string]correlation.BeadHistory{
+					"bv-test": tt.history,
+				},
+			}
+			h := NewHistoryModel(report, theme)
+
+			result := h.renderCompactTimeline(tt.history, tt.maxWidth)
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(result, want) {
+					t.Errorf("renderCompactTimeline() = %q, want to contain %q", result, want)
+				}
+			}
+
+			for _, notWant := range tt.wantNotContain {
+				if strings.Contains(result, notWant) {
+					t.Errorf("renderCompactTimeline() = %q, should NOT contain %q", result, notWant)
+				}
+			}
+		})
+	}
+}
+
+// Helper to create duration pointer
+func durationPtr(d time.Duration) *time.Duration {
+	return &d
 }
