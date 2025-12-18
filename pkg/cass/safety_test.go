@@ -176,6 +176,9 @@ func TestSafety_HealthCheckFails_RecheckAfterTTL(t *testing.T) {
 
 	// Second check - should use cache
 	status = d.Check()
+	if status != StatusNeedsIndex {
+		t.Errorf("Second Check() = %v, want StatusNeedsIndex (cached)", status)
+	}
 	if checkCount != 1 {
 		t.Errorf("checkCount = %d after second Check(), want 1 (cached)", checkCount)
 	}
