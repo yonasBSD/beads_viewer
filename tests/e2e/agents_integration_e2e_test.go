@@ -3,6 +3,7 @@ package main_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -494,7 +495,11 @@ func TestAgentsE2E_EdgeCase_UnicodeContent(t *testing.T) {
 
 // TestAgentsE2E_EdgeCase_ReadOnlyDirectory tests error handling for read-only scenarios.
 func TestAgentsE2E_EdgeCase_ReadOnlyDirectory(t *testing.T) {
-	// Skip on root or when permissions can't be tested
+	// Skip on Windows where chmod permissions don't work the same way
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping permission test on Windows - chmod behavior differs")
+	}
+	// Skip when running as root (permissions are bypassed)
 	if os.Getuid() == 0 {
 		t.Skip("Skipping permission test as root")
 	}
