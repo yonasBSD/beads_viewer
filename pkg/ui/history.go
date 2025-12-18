@@ -85,6 +85,17 @@ type TimelineEntry struct {
 	EventType  string  // For events: "created", "claimed", "closed", etc.
 }
 
+// FileTreeNode represents a node in the file tree (bv-190l)
+type FileTreeNode struct {
+	Name        string          // File or directory name
+	Path        string          // Full path
+	IsDir       bool            // True if directory
+	Children    []*FileTreeNode // Child nodes (for directories)
+	ChangeCount int             // Number of commits touching this path
+	Expanded    bool            // True if directory is expanded
+	Level       int             // Nesting depth for indentation
+}
+
 // HistoryModel represents the TUI view for bead history and code correlations
 type HistoryModel struct {
 	// Data
@@ -129,6 +140,15 @@ type HistoryModel struct {
 
 	// Expanded state tracking
 	expandedBeads map[string]bool // Track which beads have commits expanded
+
+	// File tree state (bv-190l)
+	showFileTree    bool            // Whether file tree panel is visible
+	fileTree        []*FileTreeNode // Root-level nodes of the file tree
+	flatFileList    []*FileTreeNode // Flattened visible nodes for navigation
+	selectedFileIdx int             // Index in flatFileList
+	fileTreeScroll  int             // Scroll offset for file tree
+	fileFilter      string          // Current file filter (empty = no filter)
+	fileTreeFocus   bool            // True when file tree has focus
 }
 
 // NewHistoryModel creates a new history view from a correlation report
@@ -209,6 +229,24 @@ func (h *HistoryModel) rebuildFilteredList() {
 			history.Commits = filtered
 		}
 
+		// Apply file filter (bv-190l) - keep only commits touching the filtered path
+		if h.fileFilter != "" {
+			var filtered []correlation.CorrelatedCommit
+			for _, c := range history.Commits {
+				for _, file := range c.Files {
+					// Match if file path equals filter or starts with filter (directory match)
+					if file.Path == h.fileFilter || strings.HasPrefix(file.Path, h.fileFilter+"/") {
+						filtered = append(filtered, c)
+						break
+					}
+				}
+			}
+			if len(filtered) == 0 {
+				continue
+			}
+			history.Commits = filtered
+		}
+
 		h.histories = append(h.histories, history)
 		h.beadIDs = append(h.beadIDs, beadID)
 	}
@@ -272,6 +310,222 @@ func (h *HistoryModel) SetAuthorFilter(author string) {
 func (h *HistoryModel) SetMinConfidence(conf float64) {
 	h.minConfidence = conf
 	h.rebuildFilteredList()
+}
+
+// File tree methods (bv-190l)
+
+// buildFileTree constructs a tree from all files in the history report
+func (h *HistoryModel) buildFileTree() {
+	if h.report == nil {
+		h.fileTree = nil
+		h.flatFileList = nil
+		return
+	}
+
+	// Count changes per file path
+	fileChanges := make(map[string]int)
+	for _, hist := range h.report.Histories {
+		for _, commit := range hist.Commits {
+			for _, file := range commit.Files {
+				fileChanges[file.Path]++
+			}
+		}
+	}
+
+	// Build tree structure
+	root := make(map[string]*FileTreeNode)
+
+	for path, count := range fileChanges {
+		parts := strings.Split(path, "/")
+
+		// Create/update nodes for each part of the path
+		for i := range parts {
+			isLast := i == len(parts)-1
+			fullPath := strings.Join(parts[:i+1], "/")
+			name := parts[i]
+
+			if _, exists := root[fullPath]; !exists {
+				root[fullPath] = &FileTreeNode{
+					Name:        name,
+					Path:        fullPath,
+					IsDir:       !isLast,
+					ChangeCount: 0,
+					Expanded:    false,
+					Level:       i,
+				}
+			}
+
+			if isLast {
+				root[fullPath].ChangeCount = count
+			}
+		}
+	}
+
+	// Link children to parents
+	for path, node := range root {
+		if node.Level == 0 {
+			continue
+		}
+		parentPath := strings.Join(strings.Split(path, "/")[:node.Level], "/")
+		if parent, exists := root[parentPath]; exists {
+			parent.Children = append(parent.Children, node)
+		}
+	}
+
+	// Extract root level nodes
+	h.fileTree = nil
+	for _, node := range root {
+		if node.Level == 0 {
+			h.sortTreeNode(node)
+			h.fileTree = append(h.fileTree, node)
+		}
+	}
+
+	// Sort root level
+	sort.Slice(h.fileTree, func(i, j int) bool {
+		if h.fileTree[i].IsDir != h.fileTree[j].IsDir {
+			return h.fileTree[i].IsDir
+		}
+		return h.fileTree[i].Name < h.fileTree[j].Name
+	})
+
+	h.rebuildFlatFileList()
+}
+
+// sortTreeNode recursively sorts a tree node's children
+func (h *HistoryModel) sortTreeNode(node *FileTreeNode) {
+	if node.Children == nil {
+		return
+	}
+	for _, child := range node.Children {
+		h.sortTreeNode(child)
+	}
+	sort.Slice(node.Children, func(i, j int) bool {
+		if node.Children[i].IsDir != node.Children[j].IsDir {
+			return node.Children[i].IsDir
+		}
+		return node.Children[i].Name < node.Children[j].Name
+	})
+}
+
+// rebuildFlatFileList creates a flat list of visible nodes for navigation
+func (h *HistoryModel) rebuildFlatFileList() {
+	h.flatFileList = nil
+	for _, node := range h.fileTree {
+		h.addToFlatList(node)
+	}
+}
+
+// addToFlatList recursively adds nodes to the flat list
+func (h *HistoryModel) addToFlatList(node *FileTreeNode) {
+	h.flatFileList = append(h.flatFileList, node)
+	if node.IsDir && node.Expanded {
+		for _, child := range node.Children {
+			h.addToFlatList(child)
+		}
+	}
+}
+
+// ToggleFileTree toggles the file tree panel visibility
+func (h *HistoryModel) ToggleFileTree() {
+	h.showFileTree = !h.showFileTree
+	if h.showFileTree && h.fileTree == nil {
+		h.buildFileTree()
+	}
+}
+
+// IsFileTreeVisible returns whether the file tree panel is visible
+func (h *HistoryModel) IsFileTreeVisible() bool {
+	return h.showFileTree
+}
+
+// FileTreeHasFocus returns whether the file tree has focus
+func (h *HistoryModel) FileTreeHasFocus() bool {
+	return h.fileTreeFocus
+}
+
+// SetFileTreeFocus sets the file tree focus state
+func (h *HistoryModel) SetFileTreeFocus(focus bool) {
+	h.fileTreeFocus = focus
+}
+
+// MoveUpFileTree moves selection up in the file tree
+func (h *HistoryModel) MoveUpFileTree() {
+	if h.selectedFileIdx > 0 {
+		h.selectedFileIdx--
+	}
+}
+
+// MoveDownFileTree moves selection down in the file tree
+func (h *HistoryModel) MoveDownFileTree() {
+	if h.selectedFileIdx < len(h.flatFileList)-1 {
+		h.selectedFileIdx++
+	}
+}
+
+// ToggleExpandFile expands or collapses the selected directory
+func (h *HistoryModel) ToggleExpandFile() {
+	if h.selectedFileIdx >= len(h.flatFileList) {
+		return
+	}
+	node := h.flatFileList[h.selectedFileIdx]
+	if node.IsDir {
+		node.Expanded = !node.Expanded
+		h.rebuildFlatFileList()
+	}
+}
+
+// SelectFile sets the file filter to the selected file
+func (h *HistoryModel) SelectFile() {
+	if h.selectedFileIdx >= len(h.flatFileList) {
+		return
+	}
+	node := h.flatFileList[h.selectedFileIdx]
+	if h.fileFilter == node.Path {
+		h.fileFilter = ""
+	} else {
+		h.fileFilter = node.Path
+	}
+	h.rebuildFilteredList()
+}
+
+// ClearFileFilter clears the file filter
+func (h *HistoryModel) ClearFileFilter() {
+	h.fileFilter = ""
+	h.rebuildFilteredList()
+}
+
+// GetFileFilter returns the current file filter
+func (h *HistoryModel) GetFileFilter() string {
+	return h.fileFilter
+}
+
+// SelectedFileName returns the name of the selected file/directory
+func (h *HistoryModel) SelectedFileName() string {
+	if h.selectedFileIdx >= len(h.flatFileList) {
+		return ""
+	}
+	return h.flatFileList[h.selectedFileIdx].Name
+}
+
+// SelectedFileNode returns the currently selected file tree node
+func (h *HistoryModel) SelectedFileNode() *FileTreeNode {
+	if h.selectedFileIdx >= len(h.flatFileList) {
+		return nil
+	}
+	return h.flatFileList[h.selectedFileIdx]
+}
+
+// CollapseFileNode collapses the selected node if it's an expanded directory
+func (h *HistoryModel) CollapseFileNode() {
+	if h.selectedFileIdx >= len(h.flatFileList) {
+		return
+	}
+	node := h.flatFileList[h.selectedFileIdx]
+	if node.IsDir && node.Expanded {
+		node.Expanded = false
+		h.rebuildFlatFileList()
+	}
 }
 
 // Navigation methods
@@ -342,6 +596,11 @@ func (h *HistoryModel) ToggleFocus() {
 			h.focused = historyFocusList
 		}
 	}
+}
+
+// IsDetailFocused returns true if the detail pane has focus (bv-190l)
+func (h *HistoryModel) IsDetailFocused() bool {
+	return h.focused == historyFocusDetail
 }
 
 // NextCommit moves to the next commit within the selected bead (J key)
@@ -1749,6 +2008,144 @@ func (h *HistoryModel) renderBeadLine(idx int, hist correlation.BeadHistory, wid
 		idStyle.Render(hist.BeadID),
 		titleStyle.Render(title),
 		countPart,
+	)
+
+	return line
+}
+
+// renderFileTreePanel renders the file tree panel (bv-190l)
+func (h *HistoryModel) renderFileTreePanel(width, height int) string {
+	t := h.theme
+
+	// Panel border style based on focus
+	borderColor := t.Muted
+	if h.fileTreeFocus {
+		borderColor = t.Primary
+	}
+
+	panelStyle := t.Renderer.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Width(width - 2).
+		Height(height - 2)
+
+	// Header with filter indicator
+	headerText := "FILES"
+	if h.fileFilter != "" {
+		headerText = fmt.Sprintf("FILES [%s]", truncate(h.fileFilter, 15))
+	}
+	headerStyle := t.Renderer.NewStyle().
+		Bold(true).
+		Foreground(t.Primary).
+		Width(width - 4)
+	header := headerStyle.Render(headerText)
+
+	var lines []string
+	lines = append(lines, header)
+	sepWidth := width - 4
+	if sepWidth < 1 {
+		sepWidth = 1
+	}
+	lines = append(lines, strings.Repeat("─", sepWidth))
+
+	// Build flat file list if needed
+	if len(h.flatFileList) == 0 && len(h.fileTree) > 0 {
+		h.rebuildFlatFileList()
+	}
+
+	visibleItems := height - 5
+	if visibleItems < 1 {
+		visibleItems = 1
+	}
+
+	// Adjust scroll to keep selection visible
+	if h.selectedFileIdx < h.fileTreeScroll {
+		h.fileTreeScroll = h.selectedFileIdx
+	}
+	if h.selectedFileIdx >= h.fileTreeScroll+visibleItems {
+		h.fileTreeScroll = h.selectedFileIdx - visibleItems + 1
+	}
+
+	for i := h.fileTreeScroll; i < len(h.flatFileList) && i < h.fileTreeScroll+visibleItems; i++ {
+		node := h.flatFileList[i]
+		line := h.renderFileTreeLine(i, node, width-4)
+		lines = append(lines, line)
+	}
+
+	// Pad with empty lines
+	for len(lines) < height-2 {
+		lines = append(lines, "")
+	}
+
+	content := strings.Join(lines, "\n")
+	return panelStyle.Render(content)
+}
+
+// renderFileTreeLine renders a single file tree node (bv-190l)
+func (h *HistoryModel) renderFileTreeLine(idx int, node *FileTreeNode, width int) string {
+	t := h.theme
+
+	selected := idx == h.selectedFileIdx
+	isFiltered := node.Path == h.fileFilter
+
+	// Indentation
+	indent := strings.Repeat("  ", node.Level)
+
+	// Indicator
+	indicator := "  "
+	if selected && h.fileTreeFocus {
+		indicator = "▸ "
+	}
+
+	// Expand/collapse icon for directories
+	icon := "  "
+	if node.IsDir {
+		if node.Expanded {
+			icon = "▼ "
+		} else {
+			icon = "▶ "
+		}
+	} else {
+		icon = "  "
+	}
+
+	// Change count
+	countStr := fmt.Sprintf("(%d)", node.ChangeCount)
+
+	// Calculate max name length
+	maxNameLen := width - len(indent) - len(indicator) - len(icon) - len(countStr) - 2
+	if maxNameLen < 5 {
+		maxNameLen = 5
+	}
+
+	name := node.Name
+	if len(name) > maxNameLen {
+		name = name[:maxNameLen-1] + "…"
+	}
+
+	// Styling
+	nameStyle := t.Renderer.NewStyle()
+	countStyle := t.Renderer.NewStyle().Foreground(t.Muted)
+
+	if node.IsDir {
+		nameStyle = nameStyle.Foreground(t.Secondary)
+	}
+	if isFiltered {
+		nameStyle = nameStyle.Bold(true).Foreground(t.Closed) // Green for active filter
+	}
+	if selected && h.fileTreeFocus {
+		nameStyle = nameStyle.Bold(true)
+		if !isFiltered {
+			nameStyle = nameStyle.Foreground(t.Primary)
+		}
+	}
+
+	line := fmt.Sprintf("%s%s%s%s %s",
+		indent,
+		indicator,
+		icon,
+		nameStyle.Render(name),
+		countStyle.Render(countStr),
 	)
 
 	return line

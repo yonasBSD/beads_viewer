@@ -2392,6 +2392,51 @@ func (m Model) handleHistoryKeys(msg tea.KeyMsg) Model {
 		}
 	}
 
+	// Handle file tree navigation when file tree has focus (bv-190l)
+	if m.historyView.FileTreeHasFocus() {
+		switch msg.String() {
+		case "j", "down":
+			m.historyView.MoveDownFileTree()
+			return m
+		case "k", "up":
+			m.historyView.MoveUpFileTree()
+			return m
+		case "enter", "l":
+			// Expand directory or select file for filtering
+			node := m.historyView.SelectedFileNode()
+			if node != nil {
+				if node.IsDir {
+					m.historyView.ToggleExpandFile()
+				} else {
+					m.historyView.SelectFile()
+					name := m.historyView.SelectedFileName()
+					m.statusMsg = fmt.Sprintf("📁 Filtering by: %s", name)
+					m.statusIsError = false
+				}
+			}
+			return m
+		case "h":
+			// Collapse directory
+			m.historyView.CollapseFileNode()
+			return m
+		case "esc":
+			// If filter is active, clear it; otherwise close file tree
+			if m.historyView.GetFileFilter() != "" {
+				m.historyView.ClearFileFilter()
+				m.statusMsg = "📁 File filter cleared"
+			} else {
+				m.historyView.SetFileTreeFocus(false)
+				m.statusMsg = "📁 File tree: press Tab to return focus"
+			}
+			m.statusIsError = false
+			return m
+		case "tab":
+			// Switch focus away from file tree
+			m.historyView.SetFileTreeFocus(false)
+			return m
+		}
+	}
+
 	switch msg.String() {
 	case "/":
 		// Start search (bv-nkrj)
@@ -2434,7 +2479,21 @@ func (m Model) handleHistoryKeys(msg tea.KeyMsg) Model {
 			m.historyView.PrevCommit()
 		}
 	case "tab":
-		m.historyView.ToggleFocus()
+		// Cycle focus: list -> detail -> file tree (if visible) -> list (bv-190l)
+		if m.historyView.IsFileTreeVisible() {
+			if m.historyView.FileTreeHasFocus() {
+				// File tree -> list
+				m.historyView.SetFileTreeFocus(false)
+			} else if m.historyView.IsDetailFocused() {
+				// Detail -> file tree
+				m.historyView.SetFileTreeFocus(true)
+			} else {
+				// List -> detail
+				m.historyView.ToggleFocus()
+			}
+		} else {
+			m.historyView.ToggleFocus()
+		}
 	case "enter":
 		// Jump to selected bead in main list
 		var selectedID string
@@ -2497,9 +2556,14 @@ func (m Model) handleHistoryKeys(msg tea.KeyMsg) Model {
 			}
 			m.statusIsError = false
 		}
-	case "f":
-		// Toggle author filter (simple toggle for now)
-		m.statusMsg = "💡 Author filter: Use 'c' to cycle confidence thresholds"
+	case "f", "F":
+		// Toggle file tree panel (bv-190l)
+		m.historyView.ToggleFileTree()
+		if m.historyView.IsFileTreeVisible() {
+			m.statusMsg = "📁 File tree: j/k navigate, Enter select, Esc close"
+		} else {
+			m.statusMsg = "📁 File tree hidden"
+		}
 		m.statusIsError = false
 	case "o":
 		// Open commit in browser (bv-xf4p)
