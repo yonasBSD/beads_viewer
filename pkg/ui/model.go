@@ -64,6 +64,7 @@ const (
 	focusFlowMatrix  // Cross-label flow matrix view
 	focusTutorial    // Interactive tutorial (bv-8y31)
 	focusCassModal   // Cass session preview modal (bv-5bqh)
+	focusUpdateModal // Self-update modal (bv-182)
 )
 
 // SortMode represents the current list sorting mode (bv-3ita)
@@ -409,6 +410,10 @@ type Model struct {
 	showCassModal  bool
 	cassModal      CassSessionModal
 	cassCorrelator *cass.Correlator
+
+	// Self-update modal (bv-182)
+	showUpdateModal bool
+	updateModal     UpdateModal
 }
 
 // labelCount is a simple label->count pair for display
@@ -959,6 +964,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateTag = msg.TagName
 		m.updateURL = msg.URL
 
+	case UpdateCompleteMsg:
+		// Forward to the update modal
+		if m.showUpdateModal {
+			m.updateModal, cmd = m.updateModal.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+
+	case UpdateProgressMsg:
+		// Forward to the update modal
+		if m.showUpdateModal {
+			m.updateModal, cmd = m.updateModal.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+
 	case ReadyTimeoutMsg:
 		// bv-7wl7: Legacy fallback handler (no longer used).
 		// The model is now initialized as ready with default dimensions in NewModel(),
@@ -1424,6 +1443,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showCassModal = false
 				m.focused = focusList
 				return m, tea.Batch(cmds...)
+			}
+			return m, tea.Batch(cmds...)
+		}
+
+		// Handle self-update modal (bv-182)
+		if m.showUpdateModal {
+			m.updateModal, cmd = m.updateModal.Update(msg)
+			cmds = append(cmds, cmd)
+
+			// Handle modal state changes
+			switch msg.String() {
+			case "esc", "q":
+				// Always allow escape to close
+				if !m.updateModal.IsInProgress() {
+					m.showUpdateModal = false
+					m.focused = focusList
+					return m, tea.Batch(cmds...)
+				}
+			case "enter":
+				// Close on enter if complete or if cancelled
+				if m.updateModal.IsComplete() {
+					m.showUpdateModal = false
+					m.focused = focusList
+					return m, tea.Batch(cmds...)
+				}
+				// If confirming and cancelled, close
+				if m.updateModal.IsConfirming() && m.updateModal.IsCancelled() {
+					m.showUpdateModal = false
+					m.focused = focusList
+					return m, tea.Batch(cmds...)
+				}
+			case "n", "N":
+				// Quick cancel
+				if m.updateModal.IsConfirming() {
+					m.showUpdateModal = false
+					m.focused = focusList
+					return m, tea.Batch(cmds...)
+				}
 			}
 			return m, tea.Batch(cmds...)
 		}
@@ -3269,6 +3326,9 @@ func (m Model) handleListKeys(msg tea.KeyMsg) Model {
 	case "V":
 		// Show cass session preview modal (bv-5bqh)
 		m.showCassSessionModal()
+	case "U":
+		// Show self-update modal (bv-182)
+		m.showSelfUpdateModal()
 	}
 	return m
 }
@@ -3403,6 +3463,9 @@ func (m Model) View() string {
 	} else if m.showCassModal {
 		// Cass session preview modal (bv-5bqh)
 		body = m.cassModal.CenterModal(m.width, m.height-1)
+	} else if m.showUpdateModal {
+		// Self-update modal (bv-182)
+		body = m.updateModal.CenterModal(m.width, m.height-1)
 	} else if m.showLabelHealthDetail && m.labelHealthDetail != nil {
 		body = m.renderLabelHealthDetail(*m.labelHealthDetail)
 	} else if m.showLabelGraphAnalysis && m.labelGraphAnalysisResult != nil {
@@ -5805,6 +5868,22 @@ func (m *Model) showCassSessionModal() {
 	m.cassModal.SetSize(m.width, m.height)
 	m.showCassModal = true
 	m.focused = focusCassModal
+}
+
+// showSelfUpdateModal shows the self-update modal (bv-182)
+func (m *Model) showSelfUpdateModal() {
+	// Check if an update is available
+	if !m.updateAvailable || m.updateTag == "" {
+		m.statusMsg = "No update available - you're running the latest version"
+		m.statusIsError = false
+		return
+	}
+
+	// Create and show the modal
+	m.updateModal = NewUpdateModal(m.updateTag, m.updateURL, m.theme)
+	m.updateModal.SetSize(m.width, m.height)
+	m.showUpdateModal = true
+	m.focused = focusUpdateModal
 }
 
 // getCassSessionCount returns the cached session count for the selected bead (bv-y836)

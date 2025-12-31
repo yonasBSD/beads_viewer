@@ -109,7 +109,11 @@ const contextHelpList = `## List View
   b         Board view
   g         Graph view
   i         Insights panel
-  h         History view`
+  h         History view
+
+**Actions**
+  U         Self-update bv
+  V         Preview cass sessions`
 
 const contextHelpGraph = `## Graph View
 

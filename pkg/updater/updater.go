@@ -98,18 +98,29 @@ func checkForUpdates(client *http.Client, url string) (string, string, error) {
 
 // compareVersions compares semver-ish strings with optional leading 'v' and optional pre-release
 // suffix (e.g., v1.2.3-alpha). Pre-release versions are considered LOWER than their corresponding
-// release version per SemVer spec.
+// release version per SemVer spec, EXCEPT for development builds.
 // Returns 1 if v1>v2, -1 if v1<v2, 0 if equal.
 //
 // Special handling for development builds:
-// Any version string that cannot be parsed as a version (e.g. "dev", "dirty", "nightly")
-// is considered NEWER than any parsed semantic version. This prevents stable releases
-// from prompting "updates" to users running development/nightly builds.
+// Version strings containing dev-like suffixes (e.g. "dev", "dirty", "nightly", "local")
+// are considered NEWER than stable releases to prevent false "update available" prompts.
+// This applies both to unparseable versions like "dev" and parseable versions like "v0.11.2-dirty".
 func compareVersions(v1, v2 string) int {
 	type parsed struct {
 		parts      []int
 		prerelease bool
 		preLabel   string
+	}
+
+	// isDevLabel returns true if the prerelease label indicates a development build
+	isDevLabel := func(label string) bool {
+		label = strings.ToLower(label)
+		return strings.Contains(label, "dev") ||
+			strings.Contains(label, "dirty") ||
+			strings.Contains(label, "nightly") ||
+			strings.Contains(label, "local") ||
+			strings.Contains(label, "snapshot") ||
+			strings.Contains(label, "git")
 	}
 
 	parse := func(v string) *parsed {
@@ -151,8 +162,8 @@ func compareVersions(v1, v2 string) int {
 	p1 := parse(v1)
 	p2 := parse(v2)
 
-	// If local version (v2) is a development build, consider it newer than any release
-	// to prevent downgrade prompts.
+	// If local version (v2) is a development build (unparseable), consider it newer
+	// than any release to prevent downgrade prompts.
 	isDev := func(v string) bool {
 		v = strings.ToLower(v)
 		return strings.Contains(v, "dev") || strings.Contains(v, "nightly") || strings.Contains(v, "dirty")
@@ -160,6 +171,35 @@ func compareVersions(v1, v2 string) int {
 
 	if p2 == nil && isDev(v2) {
 		return -1 // v2 (dev) > v1 (any)
+	}
+
+	// Special case: if local version (v2) has a dev-like prerelease suffix,
+	// treat it as newer than a release with the same base version.
+	// e.g., v0.11.2-dirty should NOT prompt to update to v0.11.2
+	if p1 != nil && p2 != nil && p2.prerelease && isDevLabel(p2.preLabel) {
+		// Check if base versions are the same or local is newer
+		for i := 0; i < 3; i++ {
+			if p1.parts[i] > p2.parts[i] {
+				// Remote has higher version - this is a real update
+				break
+			}
+			if p1.parts[i] < p2.parts[i] {
+				// Local base version is higher - definitely no update needed
+				return -1
+			}
+		}
+		// Base versions are equal; local is a dev build of this version
+		// Consider local as newer to prevent false update prompts
+		partsEqual := true
+		for i := 0; i < 3; i++ {
+			if p1.parts[i] != p2.parts[i] {
+				partsEqual = false
+				break
+			}
+		}
+		if partsEqual {
+			return -1 // dev build is considered newer than same-version release
+		}
 	}
 
 	// If one is parsed (valid semver) and the other is not (dev/custom),

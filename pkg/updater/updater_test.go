@@ -215,10 +215,31 @@ func TestCompareVersions_DevBuilds(t *testing.T) {
 		v2       string // local
 		expected int    // 1 if remote>local (update needed), -1 if local>remote (no update)
 	}{
+		// Unparseable dev versions
 		{"dev is newer than release", "v1.0.0", "dev", -1},
 		{"nightly is newer than release", "v1.0.0", "nightly", -1},
-		// "dirty" string itself is unparsable as semver, so it triggers the dev build check
 		{"dirty string is newer than release", "v1.0.0", "dirty", -1},
+
+		// Parseable dev builds with suffixes - THE BUG FIX CASES
+		// These should NOT trigger update prompts when local is a dev build of the same version
+		{"v0.11.2-dirty should not update to v0.11.2", "v0.11.2", "v0.11.2-dirty", -1},
+		{"v0.11.2-dev should not update to v0.11.2", "v0.11.2", "v0.11.2-dev", -1},
+		{"v0.11.2-local should not update to v0.11.2", "v0.11.2", "v0.11.2-local", -1},
+		{"v0.11.2-nightly should not update to v0.11.2", "v0.11.2", "v0.11.2-nightly", -1},
+		{"v0.11.2-snapshot should not update to v0.11.2", "v0.11.2", "v0.11.2-snapshot", -1},
+		{"v0.11.2-git.abc123 should not update to v0.11.2", "v0.11.2", "v0.11.2-git.abc123", -1},
+
+		// Dev builds with lower base version SHOULD prompt for update
+		{"v0.11.3 should update from v0.11.2-dirty", "v0.11.3", "v0.11.2-dirty", 1},
+		{"v1.0.0 should update from v0.11.2-dev", "v1.0.0", "v0.11.2-dev", 1},
+
+		// Dev build with higher base version should NOT prompt
+		{"v0.11.2 should not update from v0.11.3-dirty", "v0.11.2", "v0.11.3-dirty", -1},
+
+		// Normal pre-releases (NOT dev builds) should still follow semver
+		{"v0.11.2-alpha is lower than v0.11.2", "v0.11.2", "v0.11.2-alpha", 1},
+		{"v0.11.2-beta is lower than v0.11.2", "v0.11.2", "v0.11.2-beta", 1},
+		{"v0.11.2-rc1 is lower than v0.11.2", "v0.11.2", "v0.11.2-rc1", 1},
 	}
 
 	for _, tt := range tests {

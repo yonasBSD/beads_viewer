@@ -182,6 +182,8 @@ func (s *ShortcutsSidebar) allSections() []shortcutSection {
 				{"C", "Copy"},
 				{"O", "Open in $EDITOR"},
 				{"R", "Recipe picker"},
+				{"U", "Self-update"},
+				{"V", "Cass sessions"},
 			},
 		},
 	}
